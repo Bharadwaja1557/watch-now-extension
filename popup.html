@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Watch Now</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ── App Shell ────────────────────────────────────────────────── -->
+  <div id="app">
+
+    <!-- Header (always visible) -->
+    <header id="app-header">
+      <div class="header-inner">
+        <span class="logo">▶ Watch Now</span>
+        <div class="header-controls">
+          <input
+            type="text"
+            id="search-input"
+            class="search-input"
+            placeholder="Search videos…"
+            aria-label="Search videos"
+          />
+          <button id="rescan-btn" class="btn-rescan" title="Re-scan playlist">
+            ↺ Rescan
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Views ─────────────────────────────────────────────────── -->
+
+    <!-- Loading View -->
+    <div id="loadingView" class="view" aria-live="polite">
+      <div class="loading-inner">
+        <div class="spinner"></div>
+        <p class="loading-title">Scanning your playlist…</p>
+        <p id="loading-count" class="loading-count">0 videos found</p>
+        <p class="loading-hint">Keep the Watch Later tab open while scanning.</p>
+      </div>
+    </div>
+
+    <!-- Error View -->
+    <div id="errorView" class="view">
+      <div class="error-inner">
+        <div class="error-icon">⚠</div>
+        <p class="error-title">Watch Later tab not found</p>
+        <p class="error-body">
+          Open your
+          <a
+            href="https://www.youtube.com/playlist?list=WL"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="link"
+          >Watch Later playlist</a>
+          in a YouTube tab, then click Rescan.
+        </p>
+        <button id="error-open-btn" class="btn-primary">Open Watch Later</button>
+      </div>
+    </div>
+
+    <!-- Empty View -->
+    <div id="emptyView" class="view">
+      <div class="empty-inner">
+        <div class="empty-icon">📭</div>
+        <p class="empty-title">Your Watch Later is empty</p>
+        <p class="empty-body">Add some videos and click Rescan.</p>
+      </div>
+    </div>
+
+    <!-- Video Grid View -->
+    <div id="videoGrid" class="view">
+      <div id="grid-container" class="grid-container"></div>
+      <div id="no-results" class="no-results hidden">No videos match your search.</div>
+    </div>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

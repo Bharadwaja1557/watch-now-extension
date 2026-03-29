@@ -1,0 +1,453 @@
+/* ─── Reset & Base ─────────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-primary:    #0f0f0f;
+  --bg-surface:    #1a1a1a;
+  --bg-card:       #212121;
+  --bg-card-hover: #2d2d2d;
+  --border:        #303030;
+  --accent:        #ff0000;
+  --accent-hover:  #cc0000;
+  --text-primary:  #f1f1f1;
+  --text-secondary:#aaaaaa;
+  --text-muted:    #717171;
+  --radius-sm:     4px;
+  --radius-md:     8px;
+  --radius-lg:     12px;
+  --shadow:        0 2px 12px rgba(0, 0, 0, 0.5);
+  --transition:    0.15s ease;
+}
+
+html {
+  /* min-width is what Chrome actually reads to size the popup window.
+     Never use overflow-x: hidden on html/body — it collapses the popup to ~0px. */
+  min-width: 620px;
+  min-height: 500px;
+}
+
+body {
+  min-width: 620px;
+  min-height: 500px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: "Roboto", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  /* No overflow-x: hidden here — that's what was collapsing the popup width */
+}
+
+/* ─── App Shell ─────────────────────────────────────────────────────────────── */
+
+#app {
+  display: flex;
+  flex-direction: column;
+  width: 620px;
+  min-width: 620px;  /* anchors the popup — Chrome sizes to content width */
+  min-height: 480px;
+  max-height: 640px;
+  overflow: hidden;  /* contain overflow here, not on body */
+}
+
+/* ─── Header ────────────────────────────────────────────────────────────────── */
+
+#app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  flex-shrink: 0;
+}
+
+.header-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.logo::first-letter {
+  color: var(--accent);
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+.search-input:focus {
+  border-color: #666;
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.btn-rescan {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background var(--transition), color var(--transition);
+}
+
+.btn-rescan:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+
+/* ─── Views: only .active is visible ────────────────────────────────────────── */
+
+.view {
+  display: none;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.view.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Loading View ──────────────────────────────────────────────────────────── */
+
+#loadingView {
+  justify-content: center;
+  align-items: center;
+}
+
+.loading-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.loading-count {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  min-height: 28px;
+}
+
+.loading-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  max-width: 260px;
+}
+
+/* ─── Error View ────────────────────────────────────────────────────────────── */
+
+#errorView {
+  justify-content: center;
+  align-items: center;
+}
+
+.error-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.error-icon {
+  font-size: 36px;
+  color: #f0a500;
+}
+
+.error-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.error-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 280px;
+  line-height: 1.6;
+}
+
+.link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.btn-primary {
+  margin-top: 8px;
+  padding: 9px 20px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+/* ─── Empty View ────────────────────────────────────────────────────────────── */
+
+#emptyView {
+  justify-content: center;
+  align-items: center;
+}
+
+.empty-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 36px;
+}
+
+.empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.empty-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ─── Video Grid View ───────────────────────────────────────────────────────── */
+
+#videoGrid {
+  padding: 12px;
+  flex-direction: column;
+  gap: 0;
+}
+
+.grid-container {
+  display: grid;
+  /* 2 columns, each exactly 280px wide */
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  width: 100%;
+}
+
+.no-results {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ─── Video Card ────────────────────────────────────────────────────────────── */
+
+.video-card {
+  /* Fixed dimensions — cards will NEVER collapse */
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  outline: none;
+  transition: background var(--transition), transform var(--transition), box-shadow var(--transition);
+
+  /* Block layout — prevent any flexbox shrink weirdness */
+  display: flex;
+  flex-direction: column;
+}
+
+.video-card:hover {
+  background: var(--bg-card-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
+}
+
+.video-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Thumbnail wrapper ──────────────────────────────────────────── */
+
+.thumb-wrap {
+  /* 16:9 aspect ratio via padding trick — height is always proportional */
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%; /* 9/16 = 56.25% */
+  background: #111;
+  overflow: hidden;
+  flex-shrink: 0; /* never collapse */
+}
+
+.thumb-img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 0;
+  transition: opacity 0.2s;
+}
+
+.thumb-img[src=""] {
+  opacity: 0;
+}
+
+/* ── Duration badge ─────────────────────────────────────────────── */
+
+.duration-badge {
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+/* ── Card meta ──────────────────────────────────────────────────── */
+
+.card-meta {
+  /* Fixed height so cards always have the same total height */
+  padding: 8px 9px 9px;
+  flex: 1;
+  min-height: 0; /* let flex control it */
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+  /* Clamp to 2 lines */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.card-channel {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Scrollbar styling ─────────────────────────────────────────────────────── */
+
+.view::-webkit-scrollbar {
+  width: 6px;
+}
+
+.view::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.view::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* ─── Responsive — pop-up is always 620px wide but allow zoom ───────────────── */
+
+@media (max-width: 400px) {
+  html, body, #app {
+    width: 100%;
+  }
+  .grid-container {
+    grid-template-columns: 1fr;
+  }
+}
