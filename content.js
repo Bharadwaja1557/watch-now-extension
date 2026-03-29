@@ -17,9 +17,13 @@
  *    If idle counter reaches STABLE_THRESHOLD → playlist is fully loaded, stop.
  * 5. Hard cap of MAX_SCROLL_ATTEMPTS prevents any infinite loop.
  *
+ * Each video object now includes a `watched` boolean:
+ *   true  → ytd-thumbnail-overlay-resume-playback-renderer is present
+ *   false → element is absent (never started or fully watched without a resume point)
+ *
  * Storage keys (must stay in sync with popup.js)
  * ───────────────────────────────────────────────
- *   watchNow_status       'idle' | 'scraping' | 'done' | 'error'
+ *   watchNow_status         'idle' | 'scraping' | 'done' | 'error'
  *   watchNow_scrapingCount  number  (live progress for popup)
  *   watchNow_videos         VideoObject[]  (written once, on completion)
  */
@@ -38,32 +42,36 @@
   /**
    * How long to wait after each scroll before reading the DOM.
    * YouTube fires a network request, receives JSON, and hydrates nodes.
-   * 1 200 ms is safe for most connections; increase if on a slow link.
+   * 1 200 ms is safe for most connections; increase on slow connections.
    */
   const SCROLL_WAIT_MS = 1200;
 
   /**
    * How many consecutive scrolls must produce zero new videos before we
    * conclude the playlist is fully loaded.
-   * 5 is conservative — 3 would work for most playlists.
    */
   const STABLE_THRESHOLD = 5;
 
   /**
    * Absolute maximum number of scroll attempts.
-   * At 1 200 ms/scroll this caps the scrape at ~4 minutes for 200 attempts.
    * A 2 000-video playlist needs ~40 scrolls; 200 is a generous safety net.
    */
   const MAX_SCROLL_ATTEMPTS = 200;
 
   // ─── Selectors ──────────────────────────────────────────────────────────────
 
+  /** Each rendered playlist row */
   const VIDEO_NODE_SELECTOR = "ytd-playlist-video-renderer";
 
   /**
+   * YouTube marks partially-watched videos with a progress bar element.
+   * Presence → video has been started (watched = true).
+   */
+  const WATCHED_OVERLAY_SELECTOR = "ytd-thumbnail-overlay-resume-playback-renderer";
+
+  /**
    * Optional: YouTube renders the total playlist count in this element.
-   * We read it as a cross-check to know when we have everything.
-   * Example text: "174 videos" or "1,024 videos"
+   * Used for an early-exit optimisation.
    */
   const PLAYLIST_COUNT_SELECTOR =
     "yt-formatted-string.ytd-playlist-sidebar-primary-info-renderer, " +
@@ -75,53 +83,71 @@
   let scraping = false;
   let videoMap = new Map(); // videoId → VideoObject
 
-  // ─── Guard: is this the Watch Later playlist? ───────────────────────────────
+  // ─── Guard ──────────────────────────────────────────────────────────────────
 
   function isWatchLaterPage() {
     return location.href.includes("youtube.com/playlist?list=WL");
   }
 
-  // ─── Async sleep ────────────────────────────────────────────────────────────
+  // ─── Helpers ────────────────────────────────────────────────────────────────
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // ─── Read the declared playlist total from the sidebar (optional) ───────────
+  function scrollToBottom() {
+    window.scrollTo({
+      top: document.documentElement.scrollHeight,
+      behavior: "instant",
+    });
+  }
 
+  /** Read the total video count declared by YouTube in the sidebar. */
   function readDeclaredTotal() {
     const els = document.querySelectorAll(PLAYLIST_COUNT_SELECTOR);
     for (const el of els) {
-      const text = el.textContent || "";
-      // Match "174 videos", "1,024 videos", "videos: 56" etc.
-      const match = text.match(/([\d,]+)\s*video/i);
+      const match = (el.textContent || "").match(/([\d,]+)\s*video/i);
       if (match) {
         const n = parseInt(match[1].replace(/,/g, ""), 10);
         if (!isNaN(n) && n > 0) return n;
       }
     }
-    return null; // not found — rely on stable-count alone
+    return null;
   }
 
-  // ─── Extract data from a single ytd-playlist-video-renderer node ────────────
+  // ─── Video extraction ────────────────────────────────────────────────────────
 
+  /**
+   * Extract a VideoObject from a ytd-playlist-video-renderer node.
+   * Returns null if the node cannot supply a valid videoId.
+   *
+   * VideoObject shape:
+   * {
+   *   videoId   : string   — YouTube video ID
+   *   title     : string
+   *   channel   : string
+   *   duration  : string   — e.g. "12:34"
+   *   thumbnail : string   — mqdefault URL
+   *   videoUrl  : string   — full watch URL
+   *   watched   : boolean  — true if resume-playback overlay is present
+   * }
+   */
   function extractVideo(node) {
     try {
-      // ── Video ID + URL ──
+      // ── ID + URL ──────────────────────────────────────────────────────────
       const linkEl = node.querySelector("a#video-title");
       if (!linkEl) return null;
 
-      const href      = linkEl.href || "";
-      const qIndex    = href.indexOf("?");
-      const params    = new URLSearchParams(qIndex !== -1 ? href.slice(qIndex + 1) : "");
-      const videoId   = params.get("v");
+      const href    = linkEl.href || "";
+      const qIdx    = href.indexOf("?");
+      const params  = new URLSearchParams(qIdx !== -1 ? href.slice(qIdx + 1) : "");
+      const videoId = params.get("v");
       if (!videoId) return null;
 
-      // ── Title ──
+      // ── Title ─────────────────────────────────────────────────────────────
       const title = (linkEl.title || linkEl.textContent || "").trim();
 
-      // ── Channel ──
-      // Try several selector patterns YouTube has used across versions.
+      // ── Channel ───────────────────────────────────────────────────────────
       const channelEl = node.querySelector(
         "ytd-channel-name yt-formatted-string, " +
         "#channel-name yt-formatted-string,     " +
@@ -130,8 +156,7 @@
       );
       const channel = channelEl ? channelEl.textContent.trim() : "Unknown";
 
-      // ── Duration ──
-      // The time badge sits inside ytd-thumbnail-overlay-time-status-renderer.
+      // ── Duration ──────────────────────────────────────────────────────────
       const durationEl = node.querySelector(
         "ytd-thumbnail-overlay-time-status-renderer span[aria-label], " +
         "ytd-thumbnail-overlay-time-status-renderer span,             " +
@@ -139,21 +164,26 @@
       );
       const duration = durationEl ? durationEl.textContent.trim() : "";
 
-      // ── Thumbnail ──
-      // Build from videoId — always available even while the img is lazy-loading.
+      // ── Thumbnail ─────────────────────────────────────────────────────────
       const thumbnail = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
 
-      // ── Final URL ──
+      // ── Watched detection ─────────────────────────────────────────────────
+      // ytd-thumbnail-overlay-resume-playback-renderer is the progress-bar
+      // element YouTube renders when a video has been partially watched.
+      // Its presence reliably indicates the user has started the video.
+      const watched = node.querySelector(WATCHED_OVERLAY_SELECTOR) !== null;
+
+      // ── Final URL ─────────────────────────────────────────────────────────
       const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-      return { videoId, title, channel, duration, thumbnail, videoUrl };
+      return { videoId, title, channel, duration, thumbnail, videoUrl, watched };
     } catch (err) {
       console.warn("[Watch Now] extractVideo error:", err);
       return null;
     }
   }
 
-  // ─── Sweep all currently-rendered nodes into videoMap ──────────────────────
+  // ─── Sweep currently-rendered nodes into videoMap ────────────────────────────
 
   function collectVisibleNodes() {
     const nodes = document.querySelectorAll(VIDEO_NODE_SELECTOR);
@@ -168,16 +198,7 @@
     return added;
   }
 
-  // ─── Scroll window to the very bottom ──────────────────────────────────────
-
-  function scrollToBottom() {
-    window.scrollTo({
-      top: document.documentElement.scrollHeight,
-      behavior: "instant", // avoid animation delay eating into our wait budget
-    });
-  }
-
-  // ─── Reset state fully ──────────────────────────────────────────────────────
+  // ─── Reset ──────────────────────────────────────────────────────────────────
 
   async function resetState() {
     scraping = false;
@@ -189,7 +210,7 @@
     });
   }
 
-  // ─── Main scraping coroutine ────────────────────────────────────────────────
+  // ─── Main scraping coroutine ─────────────────────────────────────────────────
 
   async function startScraping() {
     if (scraping) {
@@ -203,7 +224,6 @@
     scraping = true;
     videoMap = new Map();
 
-    // Signal to popup that we have started
     await chrome.storage.local.set({
       [KEY_STATUS]: "scraping",
       [KEY_COUNT]:  0,
@@ -212,13 +232,13 @@
 
     console.log("[Watch Now] Scraping started.");
 
-    // ── Optional: read the declared total so we can stop early ──
+    // Optional declared total for early-exit
     const declaredTotal = readDeclaredTotal();
     if (declaredTotal) {
       console.log(`[Watch Now] Playlist declares ${declaredTotal} videos.`);
     }
 
-    // ── Collect whatever is already visible before the first scroll ──
+    // Collect whatever is already visible before the first scroll
     collectVisibleNodes();
     await chrome.storage.local.set({ [KEY_COUNT]: videoMap.size });
 
@@ -226,26 +246,26 @@
     let stableCount     = 0;
     let previousMapSize = videoMap.size;
 
-    // ── Main scroll loop ──
     while (scrollAttempts < MAX_SCROLL_ATTEMPTS) {
       scrollAttempts++;
 
-      // 1. Scroll window to bottom to trigger YouTube's lazy loader
+      // 1. Scroll window to the very bottom to trigger YouTube's lazy loader
       scrollToBottom();
 
-      // 2. Wait for the network request + DOM hydration
+      // 2. Wait for the network response + DOM hydration
       await sleep(SCROLL_WAIT_MS);
 
-      // 3. Sweep newly rendered nodes
+      // 3. Sweep any newly-rendered nodes
       collectVisibleNodes();
 
       const currentMapSize = videoMap.size;
 
-      // 4. Publish live progress to popup
+      // 4. Publish live progress
       await chrome.storage.local.set({ [KEY_COUNT]: currentMapSize });
 
       console.log(
-        `[Watch Now] Scroll ${scrollAttempts}: ${currentMapSize} unique videos collected` +
+        `[Watch Now] Scroll ${scrollAttempts}: ` +
+        `${currentMapSize} unique videos` +
         (declaredTotal ? ` / ${declaredTotal}` : "")
       );
 
@@ -255,13 +275,11 @@
         break;
       }
 
-      // 6. Stable-count check — did we get any new videos this cycle?
+      // 6. Stable-count check
       if (currentMapSize > previousMapSize) {
-        // Progress made → reset idle counter
-        stableCount = 0;
+        stableCount     = 0;
         previousMapSize = currentMapSize;
       } else {
-        // No new videos this cycle
         stableCount++;
         console.log(
           `[Watch Now] No new videos (stable ${stableCount}/${STABLE_THRESHOLD}).`
@@ -280,7 +298,7 @@
       );
     }
 
-    // ── Final sweep: capture any nodes rendered in the last wait ──
+    // Final sweep for any nodes rendered during the last wait
     collectVisibleNodes();
 
     scraping = false;
@@ -297,21 +315,21 @@
     return { ok: true };
   }
 
-  // ─── Message listener ───────────────────────────────────────────────────────
+  // ─── Message listener ────────────────────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "START_SCRAPE") {
-      startScraping().then(sendResponse).catch((err) => {
-        console.error("[Watch Now] startScraping threw:", err);
-        sendResponse({ ok: false, error: err.message });
-      });
-      return true; // keep message channel open for async response
+      startScraping()
+        .then(sendResponse)
+        .catch((err) => {
+          console.error("[Watch Now] startScraping threw:", err);
+          sendResponse({ ok: false, error: err.message });
+        });
+      return true; // keep channel open for async response
     }
   });
 
-  // ─── SPA navigation reset ───────────────────────────────────────────────────
-  // YouTube fires yt-navigate-finish on every client-side page transition.
-  // Reset so a fresh scrape can be triggered when the user re-opens the popup.
+  // ─── SPA navigation reset ────────────────────────────────────────────────────
 
   window.addEventListener("yt-navigate-finish", () => {
     console.log("[Watch Now] SPA navigation — resetting scrape state.");

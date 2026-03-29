@@ -25,8 +25,6 @@
 }
 
 html {
-  /* min-width is what Chrome actually reads to size the popup window.
-     Never use overflow-x: hidden on html/body — it collapses the popup to ~0px. */
   min-width: 620px;
   min-height: 480px;
 }
@@ -39,7 +37,6 @@ body {
   font-family: "Roboto", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
   line-height: 1.4;
-  /* No overflow-x: hidden here — that's what was collapsing the popup width */
 }
 
 /* ─── App Shell ─────────────────────────────────────────────────────────────── */
@@ -48,13 +45,13 @@ body {
   display: flex;
   flex-direction: column;
   width: 620px;
-  min-width: 620px;  /* anchors the popup — Chrome sizes to content width */
+  min-width: 620px;
   min-height: 480px;
   max-height: 640px;
-  overflow: hidden;  /* contain overflow here, not on body */
+  overflow: hidden;
 }
 
-/* ─── Header ────────────────────────────────────────────────────────────────── */
+/* ─── Header — 3-row layout ─────────────────────────────────────────────────── */
 
 #app-header {
   position: sticky;
@@ -62,14 +59,25 @@ body {
   z-index: 100;
   background-color: var(--bg-surface);
   border-bottom: 1px solid var(--border);
-  padding: 10px 14px;
+  padding: 8px 14px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
 
-.header-inner {
+/* Shared row base */
+.header-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  width: 100%;
+}
+
+/* ── Row 1: Logo | Unwatched counter | Rescan ── */
+
+.header-row--top {
+  /* logo on the left, rescan on the right, counter fills the middle */
 }
 
 .logo {
@@ -80,46 +88,38 @@ body {
   flex-shrink: 0;
 }
 
-.logo::first-letter {
-  color: var(--accent);
+/* The "W" in "Watch" is styled to look struck-through via the title */
+.logo-later {
+  text-decoration: line-through;
+  text-decoration-color: var(--accent);
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
-.header-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.unwatched-counter {
   flex: 1;
-  min-width: 0;
-}
-
-.search-input {
-  flex: 1;
-  min-width: 0;
-  height: 32px;
-  padding: 0 10px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Subtle pill background */
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-  transition: border-color var(--transition);
-}
-
-.search-input:focus {
-  border-color: #666;
-}
-
-.search-input::placeholder {
-  color: var(--text-muted);
+  border-radius: 20px;
+  padding: 3px 10px;
+  min-height: 24px;
+  line-height: 18px;
 }
 
 .btn-rescan {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 32px;
-  padding: 0 12px;
+  height: 28px;
+  padding: 0 10px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -134,6 +134,142 @@ body {
 .btn-rescan:hover {
   background: var(--bg-card-hover);
   color: var(--text-primary);
+}
+
+/* ── Row 2: Search | Sort ── */
+
+.header-row--search {
+  /* search stretches, sort is fixed */
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+.search-input:focus {
+  border-color: #555;
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.sort-select {
+  height: 30px;
+  padding: 0 8px;
+  padding-right: 22px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23717171'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  transition: border-color var(--transition), color var(--transition);
+}
+
+.sort-select:hover,
+.sort-select:focus {
+  border-color: #555;
+  color: var(--text-primary);
+}
+
+.sort-select option {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+/* ── Row 3: Filter toggle | Surprise Me ── */
+
+.header-row--actions {
+  /* filter toggle on left, surprise on right */
+  justify-content: space-between;
+}
+
+/* Filter toggle — segmented control */
+
+.filter-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.filter-btn {
+  height: 28px;
+  padding: 0 14px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition), color var(--transition);
+}
+
+.filter-btn:last-child {
+  border-right: none;
+}
+
+.filter-btn:hover:not(.filter-btn--active) {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+
+.filter-btn--active {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Surprise Me button */
+
+.btn-surprise {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 11px;
+  background: #1e2a1e;
+  border: 1px solid #2d4a2d;
+  border-radius: var(--radius-sm);
+  color: #7ec87e;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background var(--transition), color var(--transition),
+              border-color var(--transition);
+}
+
+.btn-surprise:hover {
+  background: #243024;
+  border-color: #4a7a4a;
+  color: #a0d8a0;
+}
+
+.btn-surprise:active {
+  transform: scale(0.97);
 }
 
 /* ─── Views: only .active is visible ────────────────────────────────────────── */
@@ -301,7 +437,6 @@ body {
 
 .grid-container {
   display: grid;
-  /* 2 columns, each exactly 280px wide */
   grid-template-columns: repeat(2, 1fr);
   gap: 10px;
   width: 100%;
@@ -321,7 +456,6 @@ body {
 /* ─── Video Card ────────────────────────────────────────────────────────────── */
 
 .video-card {
-  /* Fixed dimensions — cards will NEVER collapse */
   width: 100%;
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -329,11 +463,10 @@ body {
   overflow: hidden;
   cursor: pointer;
   outline: none;
-  transition: background var(--transition), transform var(--transition), box-shadow var(--transition);
-
-  /* Block layout — prevent any flexbox shrink weirdness */
   display: flex;
   flex-direction: column;
+  transition: background var(--transition), transform var(--transition),
+              box-shadow var(--transition);
 }
 
 .video-card:hover {
@@ -347,16 +480,24 @@ body {
   outline-offset: 2px;
 }
 
+/* Watched cards are visually dimmed */
+.video-card.is-watched {
+  opacity: 0.55;
+}
+
+.video-card.is-watched:hover {
+  opacity: 0.8;
+}
+
 /* ── Thumbnail wrapper ──────────────────────────────────────────── */
 
 .thumb-wrap {
-  /* 16:9 aspect ratio via padding trick — height is always proportional */
   position: relative;
   width: 100%;
-  padding-top: 56.25%; /* 9/16 = 56.25% */
+  padding-top: 56.25%; /* 16:9 */
   background: #111;
   overflow: hidden;
-  flex-shrink: 0; /* never collapse */
+  flex-shrink: 0;
 }
 
 .thumb-img {
@@ -367,7 +508,6 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
-  border-radius: 0;
   transition: opacity 0.2s;
 }
 
@@ -392,13 +532,31 @@ body {
   line-height: 1.4;
 }
 
+/* ── Watched badge ──────────────────────────────────────────────── */
+
+.watched-badge {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #aaa;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  line-height: 1.4;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* ── Card meta ──────────────────────────────────────────────────── */
 
 .card-meta {
-  /* Fixed height so cards always have the same total height */
   padding: 8px 9px 9px;
   flex: 1;
-  min-height: 0; /* let flex control it */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -410,7 +568,6 @@ body {
   font-weight: 600;
   color: var(--text-primary);
   line-height: 1.4;
-  /* Clamp to 2 lines */
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -426,93 +583,8 @@ body {
   text-overflow: ellipsis;
 }
 
-/* ─── Scrollbar styling ─────────────────────────────────────────────────────── */
+/* ─── Scrollbar ─────────────────────────────────────────────────────────────── */
 
-.view::-webkit-scrollbar {
-  width: 6px;
-}
-
-.view::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.view::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-
-/* ─── Responsive — pop-up is always 620px wide but allow zoom ───────────────── */
-
-@media (max-width: 400px) {
-  html, body, #app {
-    width: 100%;
-  }
-  .grid-container {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ─── Sort Dropdown ─────────────────────────────────────────────────────────── */
-
-.sort-select {
-  height: 32px;
-  padding: 0 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-  outline: none;
-  appearance: none;          /* remove native chrome arrow on some OSes */
-  -webkit-appearance: none;
-  /* Custom minimal arrow */
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23717171'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 7px center;
-  padding-right: 22px;
-  transition: border-color var(--transition), color var(--transition);
-}
-
-.sort-select:hover,
-.sort-select:focus {
-  border-color: #666;
-  color: var(--text-primary);
-}
-
-.sort-select option {
-  background: var(--bg-surface);
-  color: var(--text-primary);
-}
-
-/* ─── Surprise Me Button ────────────────────────────────────────────────────── */
-
-.btn-surprise {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 32px;
-  padding: 0 11px;
-  background: #1e2a1e;
-  border: 1px solid #2d4a2d;
-  border-radius: var(--radius-sm);
-  color: #7ec87e;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: background var(--transition), color var(--transition),
-              border-color var(--transition);
-}
-
-.btn-surprise:hover {
-  background: #243024;
-  border-color: #4a7a4a;
-  color: #a0d8a0;
-}
-
-.btn-surprise:active {
-  transform: scale(0.97);
-}
+.view::-webkit-scrollbar        { width: 6px; }
+.view::-webkit-scrollbar-track  { background: transparent; }
+.view::-webkit-scrollbar-thumb  { background: var(--border); border-radius: 3px; }
