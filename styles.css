@@ -28,12 +28,12 @@ html {
   /* min-width is what Chrome actually reads to size the popup window.
      Never use overflow-x: hidden on html/body — it collapses the popup to ~0px. */
   min-width: 620px;
-  min-height: 500px;
+  min-height: 480px;
 }
 
 body {
   min-width: 620px;
-  min-height: 500px;
+  min-height: 480px;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: "Roboto", "Segoe UI", system-ui, sans-serif;
@@ -450,4 +450,69 @@ body {
   .grid-container {
     grid-template-columns: 1fr;
   }
+}
+
+/* ─── Sort Dropdown ─────────────────────────────────────────────────────────── */
+
+.sort-select {
+  height: 32px;
+  padding: 0 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  outline: none;
+  appearance: none;          /* remove native chrome arrow on some OSes */
+  -webkit-appearance: none;
+  /* Custom minimal arrow */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23717171'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  padding-right: 22px;
+  transition: border-color var(--transition), color var(--transition);
+}
+
+.sort-select:hover,
+.sort-select:focus {
+  border-color: #666;
+  color: var(--text-primary);
+}
+
+.sort-select option {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+/* ─── Surprise Me Button ────────────────────────────────────────────────────── */
+
+.btn-surprise {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 11px;
+  background: #1e2a1e;
+  border: 1px solid #2d4a2d;
+  border-radius: var(--radius-sm);
+  color: #7ec87e;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background var(--transition), color var(--transition),
+              border-color var(--transition);
+}
+
+.btn-surprise:hover {
+  background: #243024;
+  border-color: #4a7a4a;
+  color: #a0d8a0;
+}
+
+.btn-surprise:active {
+  transform: scale(0.97);
 }

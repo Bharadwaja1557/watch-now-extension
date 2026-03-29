@@ -14,8 +14,11 @@
     <!-- Header (always visible) -->
     <header id="app-header">
       <div class="header-inner">
+
         <span class="logo">▶ Watch Now</span>
+
         <div class="header-controls">
+          <!-- Search -->
           <input
             type="text"
             id="search-input"
@@ -23,10 +26,25 @@
             placeholder="Search videos…"
             aria-label="Search videos"
           />
+
+          <!-- Sort dropdown -->
+          <select id="sort-select" class="sort-select" aria-label="Sort order" title="Sort videos">
+            <option value="new">New</option>
+            <option value="old">Old</option>
+            <option value="shuffle">Shuffle</option>
+          </select>
+
+          <!-- Surprise Me -->
+          <button id="surprise-btn" class="btn-surprise" title="Open a random video">
+            🎲 Surprise Me
+          </button>
+
+          <!-- Rescan -->
           <button id="rescan-btn" class="btn-rescan" title="Re-scan playlist">
             ↺ Rescan
           </button>
         </div>
+
       </div>
     </header>
 
