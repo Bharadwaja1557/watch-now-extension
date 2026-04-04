@@ -1,0 +1,531 @@
+/* ============================================================
+   Watch Later Now — styles/watch-now.css
+   Renders the Watch Now page inside YouTube's existing layout.
+   YouTube's header and sidebar are kept fully intact.
+   ============================================================ */
+
+/* ── CSS Variables ──────────────────────────────────────────── */
+:root {
+  --wln-bg:           var(--yt-spec-base-background,        #fff);
+  --wln-surface:      var(--yt-spec-raised-background,      #f2f2f2);
+  --wln-border:       var(--yt-spec-10-percent-layer,       rgba(0,0,0,0.1));
+  --wln-text:         var(--yt-spec-text-primary,           #0f0f0f);
+  --wln-text-muted:   var(--yt-spec-text-secondary,         #606060);
+  --wln-accent:       #ff0000;
+  --wln-accent-soft:  rgba(255,0,0,0.08);
+  --wln-radius:       8px;
+  --wln-transition:   0.15s ease;
+  --wln-nav-height:   56px; /* overridden in JS */
+}
+
+html[dark] {
+  --wln-bg:         #0f0f0f;
+  --wln-surface:    #272727;
+  --wln-border:     rgba(255,255,255,0.1);
+  --wln-text:       #f1f1f1;
+  --wln-text-muted: #aaa;
+}
+
+/* ── Hide YouTube's page content (keep sidebar + header intact) ─ */
+/* We hide only what lives inside #page-manager so the sidebar
+   (which is a sibling to #page-manager) remains visible.         */
+body.wln-active ytd-browse,
+body.wln-active ytd-watch-flexy,
+body.wln-active ytd-search,
+body.wln-active ytd-two-column-browse-results-renderer,
+body.wln-active ytd-rich-grid-renderer,
+body.wln-active ytd-feed-filter-chip-bar-renderer,
+body.wln-active #chips-wrapper {
+  display: none !important;
+}
+
+/* ── Watch Now page overlay ──────────────────────────────────── */
+#wln-page {
+  position: fixed;
+  /* top and left are set dynamically in JS based on navbar height
+     and page-manager's left edge (which accounts for the sidebar) */
+  top:    56px;
+  left:   0;
+  right:  0;
+  bottom: 0;
+
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  background: var(--wln-bg);
+  color:      var(--wln-text);
+  font-family: "Roboto", "Arial", sans-serif;
+  font-size: 14px;
+
+  /* Sit above page content, below YouTube modals/dialogs */
+  z-index: 900;
+
+  animation: wln-fadein 0.18s ease both;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+#wln-topbar {
+  flex-shrink: 0;
+  background:  var(--wln-bg);
+  border-bottom: 1px solid var(--wln-border);
+  padding: 12px 24px 10px;
+  z-index: 10;
+}
+
+#wln-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Search */
+#wln-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 180px;
+  max-width: 460px;
+  background: var(--wln-surface);
+  border: 1px solid var(--wln-border);
+  border-radius: 40px;
+  transition: border-color var(--wln-transition), box-shadow var(--wln-transition);
+  overflow: hidden;
+}
+
+#wln-search-wrap:focus-within {
+  border-color: var(--wln-accent);
+  box-shadow: 0 0 0 1px var(--wln-accent);
+}
+
+.wln-search-icon {
+  position: absolute;
+  left: 13px;
+  color: var(--wln-text-muted);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+#wln-search {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--wln-text);
+  font-size: 14px;
+  padding: 9px 34px 9px 40px;
+  outline: none;
+  width: 100%;
+}
+
+#wln-search::placeholder {
+  color: var(--wln-text-muted);
+}
+
+#wln-search-clear {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--wln-text-muted);
+  padding: 0 12px;
+  font-size: 14px;
+  line-height: 1;
+  transition: color var(--wln-transition);
+}
+#wln-search-clear:hover { color: var(--wln-text); }
+
+/* Right controls */
+#wln-right-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+/* Sort select */
+#wln-sort {
+  background: var(--wln-surface);
+  border: 1px solid var(--wln-border);
+  border-radius: var(--wln-radius);
+  color: var(--wln-text);
+  font-size: 13px;
+  padding: 7px 11px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--wln-transition);
+}
+#wln-sort:hover,
+#wln-sort:focus { border-color: var(--wln-text-muted); }
+
+/* Watch status toggle */
+#wln-watch-toggle {
+  display: flex;
+  border: 1px solid var(--wln-border);
+  border-radius: var(--wln-radius);
+  overflow: hidden;
+}
+
+.wln-toggle-btn {
+  background: var(--wln-surface);
+  border: none;
+  border-right: 1px solid var(--wln-border);
+  color: var(--wln-text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background var(--wln-transition), color var(--wln-transition);
+  white-space: nowrap;
+}
+.wln-toggle-btn:last-child { border-right: none; }
+.wln-toggle-btn:hover {
+  background: var(--wln-border);
+  color: var(--wln-text);
+}
+.wln-toggle-btn.active {
+  background: var(--wln-text);
+  color: var(--wln-bg);
+  font-weight: 600;
+}
+
+/* Rescan button */
+#wln-rescan-btn {
+  background: var(--wln-surface);
+  border: 1px solid var(--wln-border);
+  border-radius: var(--wln-radius);
+  color: var(--wln-text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background var(--wln-transition), border-color var(--wln-transition),
+              transform 0.1s ease;
+  white-space: nowrap;
+}
+#wln-rescan-btn:hover   { background: var(--wln-border); }
+#wln-rescan-btn:active  { transform: scale(0.97); }
+#wln-rescan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Stats row */
+#wln-stats-row {
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--wln-text-muted);
+  min-height: 16px;
+}
+
+/* ── Scan progress ───────────────────────────────────────────── */
+#wln-scan-progress {
+  margin-top: 8px;
+}
+.wln-scan-text {
+  font-size: 12px;
+  color: var(--wln-text-muted);
+  margin-bottom: 4px;
+}
+.wln-progress-track {
+  height: 3px;
+  background: var(--wln-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.wln-progress-fill {
+  height: 100%;
+  background: var(--wln-accent);
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.3s ease;
+}
+
+/* ── Content area (scroll container) ────────────────────────── */
+#wln-content-area {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px 24px 48px;
+  scroll-behavior: smooth;
+}
+
+#wln-content-area::-webkit-scrollbar {
+  width: 6px;
+}
+#wln-content-area::-webkit-scrollbar-thumb {
+  background: var(--wln-border);
+  border-radius: 3px;
+}
+#wln-content-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── Video grid ──────────────────────────────────────────────── */
+#wln-grid-wrapper {
+  width: 100%;
+}
+
+#wln-video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 18px;
+}
+
+/* ── Video card ──────────────────────────────────────────────── */
+.wln-video-card {
+  background:    var(--wln-bg);
+  border-radius: var(--wln-radius);
+  overflow:      hidden;
+  cursor:        pointer;
+  position:      relative;
+  transition:    transform 0.15s ease, box-shadow 0.15s ease;
+  animation:     wln-fadein 0.2s ease both;
+}
+.wln-video-card:hover {
+  transform:  translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
+.wln-video-card.wln-watched          { opacity: 0.55; }
+.wln-video-card.wln-watched:hover    { opacity: 1; }
+
+/* Thumbnail */
+.wln-thumb-wrap {
+  position:    relative;
+  aspect-ratio: 16 / 9;
+  background:  var(--wln-surface);
+  overflow:    hidden;
+}
+.wln-thumb {
+  width:       100%;
+  height:      100%;
+  object-fit:  cover;
+  display:     block;
+  transition:  transform 0.2s ease;
+}
+.wln-video-card:hover .wln-thumb { transform: scale(1.03); }
+
+/* Duration badge */
+.wln-duration-badge {
+  position:   absolute;
+  bottom:     6px;
+  right:      6px;
+  background: rgba(0,0,0,0.85);
+  color:      #fff;
+  font-size:  11px;
+  font-weight: 500;
+  padding:    2px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+/* Play overlay (visible on hover) */
+.wln-watch-overlay {
+  position:   absolute;
+  inset:      0;
+  background: rgba(0,0,0,0.35);
+  display:    flex;
+  align-items: center;
+  justify-content: center;
+  opacity:    0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.wln-video-card:hover .wln-watch-overlay { opacity: 1; }
+
+/* Watched badge */
+.wln-watched-badge {
+  position: absolute;
+  top:  8px;
+  left: 8px;
+  pointer-events: none;
+}
+.wln-watched-badge span {
+  background:  rgba(0,0,0,0.72);
+  color:       #4caf50;
+  font-size:   10px;
+  font-weight: 600;
+  padding:     2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.03em;
+}
+
+/* Card info */
+.wln-card-info {
+  padding: 10px 12px 12px;
+}
+.wln-card-title {
+  font-size:   13px;
+  font-weight: 600;
+  color:       var(--wln-text);
+  line-height: 1.4;
+  display:     -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow:    hidden;
+  margin-bottom: 5px;
+}
+.wln-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.wln-channel {
+  font-size:   12px;
+  color:       var(--wln-text-muted);
+  white-space: nowrap;
+  overflow:    hidden;
+  text-overflow: ellipsis;
+  max-width:   200px;
+}
+.wln-card-actions { display: flex; gap: 6px; }
+.wln-mark-btn {
+  font-size:  11px;
+  font-family: inherit;
+  background: var(--wln-surface);
+  border:     1px solid var(--wln-border);
+  color:      var(--wln-text-muted);
+  border-radius: 4px;
+  padding:    4px 8px;
+  cursor:     pointer;
+  transition: background var(--wln-transition), color var(--wln-transition);
+  white-space: nowrap;
+}
+.wln-mark-btn:hover {
+  background: var(--wln-border);
+  color: var(--wln-text);
+}
+
+/* ── Empty states ────────────────────────────────────────────── */
+.wln-empty-state {
+  display:         flex;
+  flex-direction:  column;
+  align-items:     center;
+  justify-content: center;
+  padding:         80px 40px;
+  text-align:      center;
+  color:           var(--wln-text-muted);
+}
+.wln-empty-icon  { font-size: 52px; margin-bottom: 14px; opacity: 0.65; }
+.wln-empty-title { font-size: 18px; font-weight: 600; color: var(--wln-text); margin-bottom: 8px; }
+.wln-empty-sub   { font-size: 14px; margin-bottom: 24px; }
+.wln-cta-btn {
+  background:    var(--wln-accent);
+  color:         #fff;
+  border:        none;
+  border-radius: var(--wln-radius);
+  padding:       12px 24px;
+  font-size:     14px;
+  font-family:   inherit;
+  font-weight:   600;
+  cursor:        pointer;
+  transition:    opacity 0.15s ease, transform 0.1s ease;
+}
+.wln-cta-btn:hover  { opacity: 0.88; }
+.wln-cta-btn:active { transform: scale(0.97); }
+
+/* ── Toast notification ──────────────────────────────────────── */
+.wln-toast {
+  position:  fixed;
+  bottom:    32px;
+  left:      50%;
+  transform: translateX(-50%) translateY(12px);
+  background: #323232;
+  color:      #fff;
+  font-size:  13px;
+  padding:    10px 20px;
+  border-radius: 4px;
+  z-index:    99999;
+  opacity:    0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+}
+.wln-toast.wln-toast-visible {
+  opacity:   1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ── Sidebar "Watch Now" button ──────────────────────────────── */
+/* Inserted as a div after the Watch Later guide entry.
+   Must visually match ytd-guide-entry-renderer exactly.         */
+
+#wln-sidebar-btn {
+  display: block;
+}
+
+.wln-guide-anchor {
+  display:         block;
+  text-decoration: none;
+  color:           inherit;
+  outline:         none;
+}
+
+.wln-guide-inner {
+  display:     flex;
+  align-items: center;
+  gap:         16px;
+  padding:     0 24px;
+  height:      40px;
+  border-radius: 10px;
+  cursor:      pointer;
+  color:       var(--yt-spec-text-primary, #0f0f0f);
+  font-size:   14px;
+  font-family: "Roboto", "Arial", sans-serif;
+  font-weight: 400;
+  transition:  background var(--wln-transition);
+  white-space: nowrap;
+  overflow:    hidden;
+}
+.wln-guide-inner:hover {
+  background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.06));
+}
+
+/* When the Watch Now page is active, highlight the button */
+body.wln-active .wln-guide-inner {
+  background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.06));
+  font-weight: 600;
+}
+
+.wln-guide-icon {
+  display:     flex;
+  align-items: center;
+  flex-shrink: 0;
+  width:       24px;
+  height:      24px;
+  color:       var(--yt-spec-text-primary, #0f0f0f);
+}
+
+.wln-guide-label {
+  flex: 1;
+  overflow:      hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Animations ──────────────────────────────────────────────── */
+@keyframes wln-fadein {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  #wln-video-grid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+  }
+}
+
+@media (max-width: 640px) {
+  #wln-topbar    { padding: 10px 14px 8px; }
+  #wln-content-area { padding: 14px 14px 32px; }
+
+  #wln-video-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+  }
+
+  #wln-search-wrap { max-width: 100%; }
+}

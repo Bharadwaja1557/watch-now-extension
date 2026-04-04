@@ -1,12 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Watch Now",
-  "version": "1.0.0",
-  "description": "Browse your YouTube Watch Later playlist as a clean, searchable video grid.",
+  "name": "Watch Later Now",
+  "version": "2.0.0",
+  "description": "Browse, filter, search, and watch your entire YouTube Watch Later playlist.",
   "permissions": [
-    "storage",
-    "tabs",
-    "scripting"
+    "storage"
   ],
   "host_permissions": [
     "https://www.youtube.com/*"
@@ -17,18 +15,18 @@
   "content_scripts": [
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["content.js"],
+      "js": [
+        "watch-now/data-store.js",
+        "watch-now/filters.js",
+        "watch-now/video-grid.js",
+        "watch-now/scanner.js",
+        "watch-now/page-renderer.js",
+        "content-script.js"
+      ],
+      "css": ["styles/watch-now.css"],
       "run_at": "document_idle"
     }
   ],
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
