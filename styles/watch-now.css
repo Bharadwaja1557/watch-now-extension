@@ -28,24 +28,31 @@ html[dark] {
 
 /* ── Hide YouTube's page content (keep sidebar + header intact) ─ */
 /* We hide only what lives inside #page-manager so the sidebar
-   (which is a sibling to #page-manager) remains visible.         */
+   (which is a sibling to #page-manager) remains visible.
+   The chips/topics bar is hidden here as a belt-and-suspenders
+   measure; the JS offset calculation no longer relies on it being
+   hidden before measurement (it reads #page-manager.top instead). */
 body.wln-active ytd-browse,
 body.wln-active ytd-watch-flexy,
 body.wln-active ytd-search,
 body.wln-active ytd-two-column-browse-results-renderer,
 body.wln-active ytd-rich-grid-renderer,
 body.wln-active ytd-feed-filter-chip-bar-renderer,
-body.wln-active #chips-wrapper {
+body.wln-active #chips-wrapper,
+body.wln-active ytd-rich-section-renderer,
+body.wln-active ytd-statement-banner-renderer {
   display: none !important;
 }
 
 /* ── Watch Now page overlay ──────────────────────────────────── */
 #wln-page {
   position: fixed;
-  /* top and left are set dynamically in JS based on navbar height
-     and page-manager's left edge (which accounts for the sidebar) */
-  top:    56px;
-  left:   0;
+  /* top  = set by JS: #page-manager.getBoundingClientRect().top
+            → correct vertical start regardless of topics bar     */
+  /* left = set by JS: right edge of guide drawer or mini-guide
+            → correct horizontal start regardless of sidebar mode */
+  top:    56px;  /* JS overrides this immediately */
+  left:   0;     /* JS overrides this immediately */
   right:  0;
   bottom: 0;
 
@@ -58,8 +65,10 @@ body.wln-active #chips-wrapper {
   font-family: "Roboto", "Arial", sans-serif;
   font-size: 14px;
 
-  /* Sit above page content, below YouTube modals/dialogs */
-  z-index: 900;
+  /* Must be above page content (ytd-browse etc, z≈0) but below
+     YouTube's guide drawer (tp-yt-app-drawer, z≈2290) so the
+     sidebar continues to render on top of our overlay.           */
+  z-index: 500;
 
   animation: wln-fadein 0.18s ease both;
 }

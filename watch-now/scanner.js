@@ -7,7 +7,9 @@ window.WatchNowScanner = (() => {
   'use strict';
 
   const PLAYLIST_URL  = 'https://www.youtube.com/playlist?list=WL';
-  const INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/browse?prettyPrint=false';
+  // API key is appended dynamically from the extracted config so requests are
+  // authenticated correctly.  prettyPrint=false reduces response size.
+  const INNERTUBE_BASE = 'https://www.youtube.com/youtubei/v1/browse';
   const MAX_PAGES     = 500; // 500 pages × ~100 videos = up to 50 000 videos
   const PAGE_DELAY_MS = 80;  // polite delay between continuation requests
 
@@ -52,14 +54,26 @@ window.WatchNowScanner = (() => {
 
     while (token && page < MAX_PAGES) {
       page++;
-      const pct = Math.min(15 + Math.floor(page / MAX_PAGES * 75), 90);
+      // Progress: grow from 15% to 90% — use a per-page increment so the bar
+      // advances visibly even for small playlists (avoids the old formula that
+      // used MAX_PAGES=500 as denominator and barely moved for 600 videos).
+      const pct = Math.min(15 + page * 8, 88);
       progress(pct, `Loading… ${allVideos.length} videos so far`);
 
       const result = await fetchContinuationPage(config, token);
-      if (!result || result.videos.length === 0) break;
+
+      // ── BUG 3 FIX: break only on a hard network failure, NOT on an empty
+      // video list.  A continuation page can legitimately return 0 playable
+      // videos (all items were unavailable/deleted) yet still carry a token
+      // pointing to the next page.  The old `result.videos.length === 0` break
+      // condition caused the loop to abort after the first such page.
+      // Token exhaustion (result.continuation === null) is the correct signal
+      // that the playlist end has been reached — that is handled by the while
+      // condition on the next iteration.
+      if (!result) break; // genuine network / parse failure → stop
 
       allVideos.push(...result.videos);
-      token = result.continuation;
+      token = result.continuation; // null when no more pages → loop exits naturally
 
       await sleep(PAGE_DELAY_MS);
     }
@@ -158,6 +172,10 @@ window.WatchNowScanner = (() => {
   // ─── Continuation page fetch ───────────────────────────────────────────────
 
   async function fetchContinuationPage(config, token) {
+    // Include the API key in the URL — required in some regions / YouTube
+    // account states.  Without it the endpoint can return 401/403.
+    const url = `${INNERTUBE_BASE}?key=${config.apiKey}&prettyPrint=false`;
+
     const body = {
       context: {
         client: {
@@ -172,13 +190,14 @@ window.WatchNowScanner = (() => {
     };
 
     try {
-      const resp = await fetch(INNERTUBE_URL, {
+      const resp = await fetch(url, {
         method:      'POST',
         credentials: 'include',
         headers: {
           'Content-Type':             'application/json',
           'X-YouTube-Client-Name':    '1',
           'X-YouTube-Client-Version': config.clientVersion,
+          'X-Goog-Api-Key':           config.apiKey,
           'Origin':                   'https://www.youtube.com',
           'Referer':                  PLAYLIST_URL
         },
@@ -192,7 +211,7 @@ window.WatchNowScanner = (() => {
 
       const data = await resp.json();
 
-      // YouTube wraps continuation items in onResponseReceivedActions
+      // ── Path 1: onResponseReceivedActions (standard continuation response) ─
       let items = null;
       const actions = data?.onResponseReceivedActions || [];
       for (const action of actions) {
@@ -202,10 +221,18 @@ window.WatchNowScanner = (() => {
         if (ci) { items = ci; break; }
       }
 
-      // Fallback: deep search
+      // ── Path 2: direct continuationItems at top level ─────────────────────
+      if (!items && Array.isArray(data?.continuationItems)) {
+        items = data.continuationItems;
+      }
+
+      // ── Path 3: deep search fallback ──────────────────────────────────────
       if (!items) items = deepFind(data, 'continuationItems');
 
-      if (!items || !Array.isArray(items)) return { videos: [], continuation: null };
+      if (!items || !Array.isArray(items)) {
+        // No items found — treat as end of playlist (return empty, no token)
+        return { videos: [], continuation: null };
+      }
 
       return parseItems(items);
     } catch (e) {

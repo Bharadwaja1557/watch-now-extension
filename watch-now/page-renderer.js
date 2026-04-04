@@ -45,16 +45,25 @@ window.WatchNowPage = (() => {
     const existing = document.getElementById('wln-page');
     if (existing) existing.remove();
 
-    // Measure navbar height dynamically
-    const navbar =
-      document.querySelector('#masthead-container') ||
-      document.querySelector('ytd-masthead')        ||
-      document.querySelector('#masthead');
-    const navH = navbar ? Math.round(navbar.getBoundingClientRect().height) : 56;
-
-    // Measure where the page-manager's left edge is (accounts for sidebar)
+    // ── BUG 1 FIX: measure vertical offset ───────────────────────────────────
+    // We cannot use navbar.getBoundingClientRect().height because the YouTube
+    // topics/chips bar (ytd-feed-filter-chip-bar-renderer) lives BELOW the
+    // navbar with position:sticky and is NOT part of #masthead-container.
+    // Instead we read #page-manager.getBoundingClientRect().top — this always
+    // equals the distance from the viewport top to where real content begins,
+    // naturally accounting for the navbar AND any sticky bars below it.
     const pm = document.getElementById('page-manager');
-    const contentLeft = pm ? Math.round(pm.getBoundingClientRect().left) : 0;
+    const navH = pm
+      ? Math.max(Math.round(pm.getBoundingClientRect().top), 56)
+      : 56;
+
+    // ── BUG 2 FIX: measure horizontal offset ─────────────────────────────────
+    // YouTube's #page-manager always has margin-left:72px (mini-guide width).
+    // When the FULL 240px guide drawer is open it overlays #page-manager at a
+    // higher z-index — pm.getBoundingClientRect().left stays at 72px even
+    // though the guide covers 0-240px.  We must read the guide drawer's actual
+    // right edge so our overlay never starts underneath the sidebar.
+    const contentLeft = measureGuideRight();
 
     // Root page element (fixed overlay starting after the sidebar)
     const page = document.createElement('div');
@@ -379,6 +388,42 @@ window.WatchNowPage = (() => {
       toast.classList.remove('wln-toast-visible');
       setTimeout(() => toast.remove(), 300);
     }, 3500);
+  }
+
+  // ─── Layout measurement helpers ────────────────────────────────────────────
+
+  // Returns the pixel offset from the left viewport edge at which our content
+  // should begin — i.e. the right edge of whatever sidebar YouTube is showing.
+  //
+  // YouTube has two guide modes that run simultaneously:
+  //   • tp-yt-app-drawer  — full 240px drawer, position:fixed, can be open/closed
+  //   • #mini-guide       — 72px mini bar, always visible when guide is enabled
+  //
+  // #page-manager always has margin-left:72px regardless of drawer state, so
+  // pm.getBoundingClientRect().left is NOT a reliable source for the full guide.
+  function measureGuideRight() {
+    // Full guide drawer: getBoundingClientRect() accounts for CSS transforms,
+    // so when it is translated off-screen its .right is ≤ 0.
+    const drawer = document.querySelector('tp-yt-app-drawer');
+    if (drawer) {
+      const r = drawer.getBoundingClientRect();
+      if (r.right > 10) return Math.round(r.right); // drawer is open
+    }
+
+    // Mini guide fallback (72px)
+    const mini =
+      document.querySelector('#mini-guide') ||
+      document.querySelector('ytd-mini-guide-renderer');
+    if (mini) {
+      const r = mini.getBoundingClientRect();
+      if (r.right > 0) return Math.round(r.right);
+    }
+
+    // Last resort: page-manager left edge
+    const pm = document.getElementById('page-manager');
+    if (pm) return Math.round(pm.getBoundingClientRect().left);
+
+    return 0;
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
