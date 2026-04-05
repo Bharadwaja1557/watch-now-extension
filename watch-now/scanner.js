@@ -258,7 +258,7 @@ window.WatchNowScanner = (() => {
     };
 
     try {
-      const resp = await fetch(INNERTUBE_URL, {
+      const resp = await fetch(url, {
         method:      'POST',
         credentials: 'include',
         headers: {

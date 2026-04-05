@@ -46,33 +46,6 @@ body.wln-active ytd-statement-banner-renderer {
 }
 
 /* ── Watch Now page — position:fixed overlay ─────────────────── */
-/*
-   Bug 1 root cause (previous attempt):
-     position:absolute;inset:0 was injected into #page-manager, but
-     YouTube gives #page-manager position:static (no value in its own
-     CSS).  A position:absolute child of a static element resolves to
-     the nearest POSITIONED ancestor — typically ytd-app or the document
-     root — so inset:0 placed our page at y=0, directly behind the
-     position:fixed masthead (z-index:2200).  The controls were invisible
-     because the masthead covered them.  The "appears on window resize"
-     symptom confirmed it: YouTube sometimes sets position:relative on
-     #page-manager during a resize, making our overlay momentarily visible.
-
-   Fix:
-     Use position:fixed on document.body (not inside #page-manager).
-     This is independent of any ancestor's position value.
-
-     Offset via YouTube's own CSS variables so no JS measurement is needed:
-       --ytd-masthead-height   → how tall the top navbar is  (default 56px)
-       --ytd-mini-guide-width  → width of the collapsed sidebar (default 72px)
-
-     z-index:2100 places us:
-       • ABOVE the topics/chips bar  (sticky, z-index ≈ 1000)
-       • ABOVE ytd-browse content    (in-flow, z-index 0)
-       • BELOW the guide drawer      (position:fixed, z-index ≈ 2290)
-       • BELOW the masthead          (position:fixed, z-index ≈ 2200)
-     so the sidebar and top navbar remain fully visible.
-*/
 #wln-page {
   position: fixed;
   top:    var(--ytd-masthead-height,  56px);
@@ -90,7 +63,30 @@ body.wln-active ytd-statement-banner-renderer {
   font-size:   14px;
   z-index:     2100;
 
+  /* Bug 1 fix: animate when sidebar expands/collapses */
+  transition: left 0.2s ease;
+
   animation: wln-fadein 0.18s ease both;
+}
+
+/*
+  Bug 1 fix — sidebar expansion.
+
+  When the hamburger is clicked, YouTube sets the attribute
+  "guide-persistent-and-visible" on <ytd-app>.  Our #wln-page is
+  appended to <body> AFTER <ytd-app>, so the general sibling
+  combinator (~) matches here.  When that attribute is present the
+  full guide drawer is 240px wide and persistent (not an overlay),
+  so our content area must start at 240px, not 72px.
+
+  --ytd-guide-width is the CSS variable YouTube sets for the open
+  guide width; 240px is the hardcoded fallback.
+
+  Without this rule our overlay stays at left:72px while the
+  expanded sidebar covers the leftmost 240px of our content.
+*/
+ytd-app[guide-persistent-and-visible] ~ #wln-page {
+  left: var(--ytd-guide-width, 240px);
 }
 
 /* ── Top bar ─────────────────────────────────────────────────── */
@@ -485,7 +481,11 @@ body.wln-active ytd-statement-banner-renderer {
   display:       flex;
   align-items:   center;
   gap:           16px;
-  padding:       0 24px;
+  /* Bug 2 fix: padding-left 24px → 20px shifts icon+label 4px left.
+     The 🔥 emoji has heavier optical weight on its right side, making it
+     appear right-shifted vs native SVG icons.  Reducing left padding by 4px
+     corrects the alignment without changing the DOM structure. */
+  padding:       0 24px 0 20px;
   height:        40px;
   border-radius: 10px;
   cursor:        pointer;
