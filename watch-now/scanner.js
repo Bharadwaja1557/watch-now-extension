@@ -1,18 +1,19 @@
 // watch-now/scanner.js
-// Fetches the entire Watch Later playlist via YouTube's InnerTube browse API.
+// Fetches the entire Watch Later playlist.
 //
-// Architecture:
-//   • NO HTML fetching.  NO ytInitialData parsing.  NO regex.
-//   • First call: POST /browse with browseId:"VLWL" → first ~100 videos
-//   • Continuation calls: POST /browse with continuation token → next pages
-//   • Repeats until continuation is null (playlist fully loaded)
+// Architecture (hybrid):
+//   Page 1  — extracted from ytInitialData, which YouTube embeds in the HTML
+//             of the authenticated /playlist?list=WL page.  This sidesteps
+//             the InnerTube browseId authentication problem entirely: the page
+//             fetch carries the user's cookies, so the response is always the
+//             full authenticated playlist page.
+//   Pages 2+ — InnerTube /browse continuation API, same as before.
 //
 // Public API:
 //   WatchNowScanner.scan(onProgress, onFirstBatch)
 //     onProgress(pct, message)  — 0-100 progress updates
-//     onFirstBatch(videos)      — called immediately after page 1 so the UI
-//                                 can render the first batch without waiting
-//                                 for the full playlist to load
+//     onFirstBatch(videos)      — fired after page 1 so the UI can render
+//                                 immediately without waiting for full load
 //     Returns: Promise<{ videos: VideoRecord[] }>
 
 window.WatchNowScanner = (() => {
@@ -20,16 +21,15 @@ window.WatchNowScanner = (() => {
 
   // ─── Constants ─────────────────────────────────────────────────────────────
 
-  const BROWSE_URL    = 'https://www.youtube.com/youtubei/v1/browse';
-  const CLIENT_NAME   = 'WEB';
-  const CLIENT_VER    = '2.20240101.00.00';
-  const MAX_PAGES     = 500;   // 500 × ~100 = up to 50 000 videos
-  const PAGE_DELAY_MS = 100;   // polite delay between requests (ms)
+  const BROWSE_URL     = 'https://www.youtube.com/youtubei/v1/browse';
+  const PLAYLIST_URL   = 'https://www.youtube.com/playlist?list=WL';
+  const CLIENT_NAME    = 'WEB';
+  const CLIENT_VER     = '2.20240101.00.00';
+  const MAX_PAGES      = 500;   // 500 × ~100 = up to 50 000 videos
+  const PAGE_DELAY_MS  = 100;   // polite delay between requests (ms)
 
-  // YouTube now requires X-Goog-Visitor-Id on authenticated playlist endpoints.
-  // Without it the /browse response omits playlistVideoRenderer entirely, making
-  // extractVideos() return [] and the scan fail with "appears empty or inaccessible".
-  // ytcfg is YouTube's own page-config object, always present on youtube.com.
+  // Visitor-id improves continuation-request reliability.
+  // Sending null/undefined would be rejected, so we only include it when set.
   const VISITOR_DATA =
     window.ytcfg?.get?.('VISITOR_DATA') ||
     window.yt?.config_?.VISITOR_DATA    ||
@@ -40,23 +40,29 @@ window.WatchNowScanner = (() => {
   async function scan(onProgress, onFirstBatch) {
     const progress = typeof onProgress === 'function' ? onProgress : () => {};
 
-    // ── Page 1: browseId request (no HTML involved) ───────────────────────────
-    progress(5, 'Connecting to YouTube Watch Later…');
+    // ── Page 1: read ytInitialData ─────────────────────────────────────────────
+    // We do NOT call browsePost({ browseId:'VLWL' }) for the first page.
+    // That endpoint returns a restricted response (only alerts/topbar/microformat)
+    // when the request lacks the session binding that a real browser page load
+    // carries.  Instead we fetch the actual playlist page; because the fetch uses
+    // credentials:'include' the user's cookies travel with it, and YouTube returns
+    // the full authenticated playlist HTML which embeds ytInitialData with the
+    // first ~100 videos already inside it.
 
-    let firstData;
-    try {
-      firstData = await browsePost({ browseId: 'VLWL' });
-    } catch (e) {
+    progress(5, 'Reading Watch Later playlist…');
+
+    const firstData = await getInitialData();
+
+    if (!firstData) {
       throw new Error(
-        'Could not reach YouTube. Make sure you are signed in, then try again. (' + e.message + ')'
+        'Could not read Watch Later playlist. ' +
+        'Make sure you are signed in to YouTube and try again.'
       );
     }
 
     progress(12, 'Parsing playlist…');
 
-    // Debug: log the raw first response so the playlist structure can be
-    // confirmed in DevTools if the scan unexpectedly returns no videos.
-    console.log('[WatchLaterNow] First response:', firstData);
+    console.log('[WatchLaterNow] First data (ytInitialData):', firstData);
 
     const firstBatch = extractVideos(firstData);
     const firstToken = extractContinuation(firstData);
@@ -68,19 +74,22 @@ window.WatchNowScanner = (() => {
       );
     }
 
-    // Stamp addedAt for first batch based on playlist position (0 = newest).
+    console.log(
+      '[WatchLaterNow] First page:', firstBatch.length, 'videos |',
+      'continuation token:', firstToken ? 'found ✓' : 'none (playlist fits on one page)'
+    );
+
+    // Stamp addedAt for first batch (index 0 = most recently added).
     stampAddedAt(firstBatch, 0);
 
     // ── Render first batch immediately ────────────────────────────────────────
-    // Fire the callback with a copy so the caller can save/render right away
-    // without waiting for the full pagination loop to finish.
     if (typeof onFirstBatch === 'function') {
       onFirstBatch([...firstBatch]);
     }
 
     progress(18, `Got ${firstBatch.length} videos — fetching remaining pages…`);
 
-    // ── Pagination loop ───────────────────────────────────────────────────────
+    // ── Pagination loop (InnerTube continuation) ──────────────────────────────
     const allVideos = [...firstBatch];
     const seenIds   = new Set(allVideos.map(v => v.videoId));
     let   token     = firstToken;
@@ -88,7 +97,6 @@ window.WatchNowScanner = (() => {
 
     while (token && page < MAX_PAGES) {
       page++;
-      // Progress bar: grow from 18% toward 92% as pages load
       const pct = Math.min(18 + page * 7, 92);
       progress(pct, `Loading… ${allVideos.length} videos so far (page ${page})`);
 
@@ -121,12 +129,11 @@ window.WatchNowScanner = (() => {
         'next token:', result.continuation ? '✓' : 'none (end of playlist)'
       );
 
-      token = result.continuation; // null → loop exits naturally
+      token = result.continuation;
       await sleep(PAGE_DELAY_MS);
     }
 
-    // Re-stamp all addedAt values now that we have the final order.
-    // Index 0 = most recently added to Watch Later.
+    // Re-stamp with final order so sort-by-date is correct.
     stampAddedAt(allVideos, 0);
 
     progress(96, `Loaded ${allVideos.length} videos — saving…`);
@@ -134,14 +141,73 @@ window.WatchNowScanner = (() => {
     return { videos: allVideos };
   }
 
+  // ─── Initial data extraction ────────────────────────────────────────────────
+  //
+  // Retrieves the ytInitialData object that YouTube embeds in the playlist page.
+  // Two strategies, tried in order:
+  //
+  //   1. window.ytInitialData — already a parsed JS object; only valid if the
+  //      user is currently browsing /playlist?list=WL (unlikely during normal
+  //      Watch Now usage, but costs nothing to check first).
+  //
+  //   2. Fetch /playlist?list=WL with credentials:'include' and extract
+  //      ytInitialData from the HTML.  The cookie-authenticated fetch returns
+  //      the full playlist page, which embeds the first ~100 videos as JSON.
+  //
+  // Note on the spec's regex approach:
+  //   /ytInitialData\s*=\s*(\{.*?\});/s  uses non-greedy .*? which stops at
+  //   the very first "};" inside the JSON, producing invalid truncated JSON.
+  //   We use extractBalancedJson() (character-level brace counter) instead,
+  //   which reliably handles any size of embedded JSON object.
+
+  async function getInitialData() {
+    // Strategy 1 — current page already has Watch Later data
+    if (window.ytInitialData && typeof window.ytInitialData === 'object') {
+      const sample = findObjectsByKey(window.ytInitialData, 'playlistVideoRenderer');
+      if (sample.length > 0) {
+        console.log('[WatchLaterNow] getInitialData: using window.ytInitialData');
+        return window.ytInitialData;
+      }
+    }
+
+    // Strategy 2 — fetch the Watch Later playlist page
+    console.log('[WatchLaterNow] getInitialData: fetching', PLAYLIST_URL);
+    const html = await fetchHtml(PLAYLIST_URL);
+    if (!html) {
+      console.warn('[WatchLaterNow] getInitialData: page fetch returned null');
+      return null;
+    }
+
+    // Locate the ytInitialData assignment in the page HTML
+    const marker   = 'ytInitialData';
+    const markerIdx = html.indexOf(marker);
+    if (markerIdx === -1) {
+      console.warn('[WatchLaterNow] getInitialData: marker not found in HTML');
+      return null;
+    }
+
+    const braceIdx = html.indexOf('{', markerIdx);
+    if (braceIdx === -1) return null;
+
+    const jsonStr = extractBalancedJson(html, braceIdx);
+    if (!jsonStr) {
+      console.warn('[WatchLaterNow] getInitialData: balanced-JSON extraction failed');
+      return null;
+    }
+
+    try {
+      return JSON.parse(jsonStr);
+    } catch (e) {
+      console.error('[WatchLaterNow] getInitialData: JSON.parse failed —', e.message);
+      return null;
+    }
+  }
+
   // ─── Recursive tree search ──────────────────────────────────────────────────
   //
-  // Collects every value stored under `key` anywhere in the object tree,
-  // no matter how deeply nested.  This makes all parsing nesting-agnostic:
-  // YouTube can restructure its response wrapper layers without breaking us.
-  //
-  // Uses Object.keys() (own enumerable only) rather than for…in to avoid
-  // iterating inherited prototype properties.
+  // Collects every value stored under `key` anywhere in the object tree.
+  // Nesting-agnostic: YouTube can restructure response wrapper layers without
+  // breaking extraction.
 
   function findObjectsByKey(obj, key, results = []) {
     if (!obj || typeof obj !== 'object') return results;
@@ -158,10 +224,6 @@ window.WatchNowScanner = (() => {
   }
 
   // ─── Video extractor ────────────────────────────────────────────────────────
-  //
-  // Finds every `playlistVideoRenderer` in the response tree and maps each
-  // to a VideoRecord.  Skips entries that have neither a title nor a thumbnail
-  // (private / deleted videos that YouTube still lists as placeholders).
 
   function extractVideos(data) {
     const renderers = findObjectsByKey(data, 'playlistVideoRenderer');
@@ -188,20 +250,9 @@ window.WatchNowScanner = (() => {
   }
 
   // ─── Continuation token extractor ───────────────────────────────────────────
-  //
-  // Finds every `continuationItemRenderer` in the response tree.
-  // There is normally exactly one per response; we take the first.
-  //
-  // Two token paths exist inside continuationItemRenderer:
-  //   Primary:   continuationEndpoint.continuationCommand.token
-  //   Secondary: button.buttonRenderer.command.continuationCommand.token
-  //
-  // Additionally, some Watch Later responses store the token in a legacy
-  // `continuations[]` array at the playlistVideoListRenderer level.
-  // We check that as a final fallback.
 
   function extractContinuation(data) {
-    // Primary path via continuationItemRenderer (all modern responses)
+    // Primary: continuationItemRenderer (modern format)
     const items = findObjectsByKey(data, 'continuationItemRenderer');
     for (const cont of items) {
       const tok =
@@ -211,7 +262,6 @@ window.WatchNowScanner = (() => {
     }
 
     // Legacy fallback: plr.continuations[].nextContinuationData.continuation
-    // Still returned by some Watch Later configurations.
     const legacyArrays = findObjectsByKey(data, 'continuations');
     for (const arr of legacyArrays) {
       const tok = extractLegacyToken(arr);
@@ -221,13 +271,7 @@ window.WatchNowScanner = (() => {
     return null;
   }
 
-  // ─── Core API call ──────────────────────────────────────────────────────────
-  //
-  // All requests share the same context block.  Extra fields (browseId or
-  // continuation) are spread in by the caller.
-  //
-  // credentials:'include' sends the user's YouTube session cookies so the
-  // Watch Later playlist (which is private) is accessible.
+  // ─── Core API call (continuation pages only) ────────────────────────────────
 
   async function browsePost(bodyExtra) {
     const body = {
@@ -249,11 +293,9 @@ window.WatchNowScanner = (() => {
         'Content-Type':             'application/json',
         'X-YouTube-Client-Name':    '1',
         'X-YouTube-Client-Version': CLIENT_VER,
-        // Include visitor-id only when available — sending the literal string
-        // "null" is rejected by YouTube's servers.
         ...(VISITOR_DATA ? { 'X-Goog-Visitor-Id': VISITOR_DATA } : {}),
         'Origin':                   'https://www.youtube.com',
-        'Referer':                  'https://www.youtube.com/'
+        'Referer':                  PLAYLIST_URL
       },
       body: JSON.stringify(body)
     });
@@ -267,7 +309,49 @@ window.WatchNowScanner = (() => {
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  // Extract a token from the legacy continuations[] array format.
+  // Fetch a URL as text with the user's cookies.
+  async function fetchHtml(url) {
+    try {
+      const resp = await fetch(url, {
+        credentials: 'include',
+        headers: { 'Accept-Language': 'en-US,en;q=0.9' }
+      });
+      if (!resp.ok) {
+        console.warn('[WatchLaterNow] fetchHtml: HTTP', resp.status, 'for', url);
+        return null;
+      }
+      return resp.text();
+    } catch (e) {
+      console.error('[WatchLaterNow] fetchHtml failed:', e.message);
+      return null;
+    }
+  }
+
+  // Character-level brace/bracket counter that reliably extracts a complete
+  // JSON object or array from a larger string, regardless of its size.
+  // Much more reliable than regex for deeply nested JSON (like ytInitialData).
+  function extractBalancedJson(str, startIndex) {
+    let depth    = 0;
+    let inString = false;
+    let escape   = false;
+
+    for (let i = startIndex; i < str.length; i++) {
+      const ch = str[i];
+
+      if (escape)                   { escape = false; continue; }
+      if (ch === '\\' && inString)  { escape = true;  continue; }
+      if (ch === '"')               { inString = !inString; continue; }
+      if (inString)                 continue;
+
+      if (ch === '{' || ch === '[') { depth++; }
+      else if (ch === '}' || ch === ']') {
+        if (--depth === 0) return str.slice(startIndex, i + 1);
+      }
+    }
+    return null;
+  }
+
+  // Legacy continuations[] token format.
   function extractLegacyToken(continuations) {
     if (!Array.isArray(continuations)) return null;
     for (const c of continuations) {
@@ -279,7 +363,7 @@ window.WatchNowScanner = (() => {
     return null;
   }
 
-  // Extract plain text from YouTube's various text object shapes.
+  // Plain text from YouTube's text object shapes.
   function getText(obj) {
     if (!obj)                    return '';
     if (typeof obj === 'string') return obj;
@@ -288,7 +372,7 @@ window.WatchNowScanner = (() => {
     return '';
   }
 
-  // Pick the thumbnail URL closest to 320px wide (mqdefault quality).
+  // Thumbnail URL closest to 320px wide (mqdefault quality).
   function bestThumbnail(thumbs, videoId) {
     const fallback = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
     if (!thumbs?.length) return fallback;
@@ -298,8 +382,7 @@ window.WatchNowScanner = (() => {
     return sorted[0]?.url || fallback;
   }
 
-  // Stamp addedAt timestamps by playlist position.
-  // index 0 = most recently added (newest first in the default sort).
+  // Stamp addedAt by playlist position (index 0 = most recently added).
   function stampAddedAt(videos, startIndex) {
     const now = Date.now();
     videos.forEach((v, i) => {
@@ -307,7 +390,7 @@ window.WatchNowScanner = (() => {
     });
   }
 
-  // Recursive deep object search for a key, capped at depth 50.
+  // Recursive deep object search — returns first match only.
   function deepFind(obj, key, depth = 0) {
     if (depth > 50 || obj === null || typeof obj !== 'object') return undefined;
     if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
