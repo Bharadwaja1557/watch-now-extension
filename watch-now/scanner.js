@@ -26,6 +26,15 @@ window.WatchNowScanner = (() => {
   const MAX_PAGES     = 500;   // 500 × ~100 = up to 50 000 videos
   const PAGE_DELAY_MS = 100;   // polite delay between requests (ms)
 
+  // YouTube now requires X-Goog-Visitor-Id on authenticated playlist endpoints.
+  // Without it the /browse response omits playlistVideoRenderer entirely, making
+  // extractVideos() return [] and the scan fail with "appears empty or inaccessible".
+  // ytcfg is YouTube's own page-config object, always present on youtube.com.
+  const VISITOR_DATA =
+    window.ytcfg?.get?.('VISITOR_DATA') ||
+    window.yt?.config_?.VISITOR_DATA    ||
+    null;
+
   // ─── Public entry point ────────────────────────────────────────────────────
 
   async function scan(onProgress, onFirstBatch) {
@@ -44,6 +53,10 @@ window.WatchNowScanner = (() => {
     }
 
     progress(12, 'Parsing playlist…');
+
+    // Debug: log the raw first response so the playlist structure can be
+    // confirmed in DevTools if the scan unexpectedly returns no videos.
+    console.log('[WatchLaterNow] First response:', firstData);
 
     const firstBatch = extractVideos(firstData);
     const firstToken = extractContinuation(firstData);
@@ -236,6 +249,9 @@ window.WatchNowScanner = (() => {
         'Content-Type':             'application/json',
         'X-YouTube-Client-Name':    '1',
         'X-YouTube-Client-Version': CLIENT_VER,
+        // Include visitor-id only when available — sending the literal string
+        // "null" is rejected by YouTube's servers.
+        ...(VISITOR_DATA ? { 'X-Goog-Visitor-Id': VISITOR_DATA } : {}),
         'Origin':                   'https://www.youtube.com',
         'Referer':                  'https://www.youtube.com/'
       },
