@@ -1,70 +1,94 @@
 // watch-now/scanner.js
-// Fetches the user's entire Watch Later playlist using YouTube's InnerTube API.
-// Supports 1000+ videos via continuation token pagination.
+// Fetches the entire Watch Later playlist via YouTube's InnerTube browse API.
+//
+// Architecture:
+//   • NO HTML fetching.  NO ytInitialData parsing.  NO regex.
+//   • First call: POST /browse with browseId:"VLWL" → first ~100 videos
+//   • Continuation calls: POST /browse with continuation token → next pages
+//   • Repeats until continuation is null (playlist fully loaded)
+//
+// Public API:
+//   WatchNowScanner.scan(onProgress, onFirstBatch)
+//     onProgress(pct, message)  — 0-100 progress updates
+//     onFirstBatch(videos)      — called immediately after page 1 so the UI
+//                                 can render the first batch without waiting
+//                                 for the full playlist to load
+//     Returns: Promise<{ videos: VideoRecord[] }>
 
 window.WatchNowScanner = (() => {
   'use strict';
 
-  const PLAYLIST_URL   = 'https://www.youtube.com/playlist?list=WL';
-  const INNERTUBE_URL  = 'https://www.youtube.com/youtubei/v1/browse?prettyPrint=false';
-  const MAX_PAGES      = 500;  // 500 pages × ~100 videos = up to 50 000 videos
-  const PAGE_DELAY_MS  = 80;   // polite delay between continuation requests
+  // ─── Constants ─────────────────────────────────────────────────────────────
+
+  const BROWSE_URL    = 'https://www.youtube.com/youtubei/v1/browse';
+  const CLIENT_NAME   = 'WEB';
+  const CLIENT_VER    = '2.20240101.00.00';
+  const MAX_PAGES     = 500;   // 500 × ~100 = up to 50 000 videos
+  const PAGE_DELAY_MS = 100;   // polite delay between requests (ms)
 
   // ─── Public entry point ────────────────────────────────────────────────────
 
-  async function scan(onProgress) {
-    const progress = onProgress || (() => {});
+  async function scan(onProgress, onFirstBatch) {
+    const progress = typeof onProgress === 'function' ? onProgress : () => {};
 
-    // ── Step 1: Fetch the playlist HTML page ─────────────────────────────────
-    progress(5, 'Fetching Watch Later playlist…');
+    // ── Page 1: browseId request (no HTML involved) ───────────────────────────
+    progress(5, 'Connecting to YouTube Watch Later…');
 
-    const html = await safeFetch(PLAYLIST_URL);
-    if (!html) {
+    let firstData;
+    try {
+      firstData = await browsePost({ browseId: 'VLWL' });
+    } catch (e) {
       throw new Error(
-        'Could not load Watch Later. Make sure you are signed in to YouTube and try again.'
+        'Could not reach YouTube. Make sure you are signed in, then try again. (' + e.message + ')'
       );
     }
 
-    // ── Step 2: Extract InnerTube config ──────────────────────────────────────
-    const config = extractInnertubeConfig(html);
-    progress(10, 'Parsing first batch of videos…');
+    progress(12, 'Parsing playlist…');
 
-    // ── Step 3: Extract first ~100 videos from ytInitialData ─────────────────
-    const ytData = extractYtInitialData(html);
-    if (!ytData) {
+    const { videos: firstBatch, continuation: firstToken } =
+      parseFirstResponse(firstData);
+
+    if (firstBatch.length === 0 && !firstToken) {
       throw new Error(
-        'Could not parse playlist data. Visit youtube.com/playlist?list=WL in a tab and try again.'
+        'Watch Later playlist appears empty or is not accessible. ' +
+        'Make sure you are signed in to YouTube.'
       );
     }
 
-    const { videos: firstBatch, continuation: firstToken } = extractVideosAndToken(ytData);
+    // Stamp addedAt for first batch based on playlist position (0 = newest).
+    stampAddedAt(firstBatch, 0);
 
+    // ── Render first batch immediately ────────────────────────────────────────
+    // Fire the callback with a copy so the caller can save/render right away
+    // without waiting for the full pagination loop to finish.
+    if (typeof onFirstBatch === 'function') {
+      onFirstBatch([...firstBatch]);
+    }
+
+    progress(18, `Got ${firstBatch.length} videos — fetching remaining pages…`);
+
+    // ── Pagination loop ───────────────────────────────────────────────────────
     const allVideos = [...firstBatch];
     const seenIds   = new Set(allVideos.map(v => v.videoId));
-
-    progress(15, `Got ${allVideos.length} videos — fetching remaining pages…`);
-    console.log(
-      '[WatchLaterNow] Initial page:', allVideos.length, 'videos,',
-      'token:', firstToken ? 'found ✓' : 'NONE — playlist may be fully loaded or token missing'
-    );
-
-    // ── Step 4: Follow continuation tokens until all videos are loaded ────────
-    let token = firstToken;
-    let page  = 0;
+    let   token     = firstToken;
+    let   page      = 0;
 
     while (token && page < MAX_PAGES) {
       page++;
-      const pct = Math.min(15 + page * 8, 88);
+      // Progress bar: grow from 18% toward 92% as pages load
+      const pct = Math.min(18 + page * 7, 92);
       progress(pct, `Loading… ${allVideos.length} videos so far (page ${page})`);
 
-      const result = await fetchContinuationPage(config, token);
-
-      if (!result) {
-        console.warn('[WatchLaterNow] Continuation page', page, 'failed — stopping');
+      let result;
+      try {
+        result = await fetchContinuation(token);
+      } catch (e) {
+        console.warn('[WatchLaterNow] Page', page, 'failed —', e.message, '— stopping');
         break;
       }
 
-      // Deduplicate: skip videos already seen (prevents doubles on retry)
+      if (!result) break;
+
       let added = 0;
       for (const video of result.videos) {
         if (!seenIds.has(video.videoId)) {
@@ -75,275 +99,141 @@ window.WatchNowScanner = (() => {
       }
 
       console.log(
-        '[WatchLaterNow] Page', page, ':', result.videos.length,
-        'videos (' + added + ' new), next token:', result.continuation ? 'found ✓' : 'none (end)'
+        '[WatchLaterNow] Page', page, '—',
+        result.videos.length, 'videos (' + added + ' new),',
+        'next token:', result.continuation ? '✓' : 'none (end of playlist)'
       );
 
-      token = result.continuation; // null → loop exits
+      token = result.continuation; // null → loop exits naturally
       await sleep(PAGE_DELAY_MS);
     }
 
-    // ── Step 5: Stamp addedAt from playlist position ──────────────────────────
+    // Re-stamp all addedAt values now that we have the final order.
     // Index 0 = most recently added to Watch Later.
-    const now = Date.now();
-    allVideos.forEach((video, index) => {
-      video.addedAt = now - index * 1000;
-    });
+    stampAddedAt(allVideos, 0);
 
-    progress(95, `Loaded ${allVideos.length} videos — saving…`);
+    progress(96, `Loaded ${allVideos.length} videos — saving…`);
+    console.log('[WatchLaterNow] Scan complete:', allVideos.length, 'videos total');
     return { videos: allVideos };
   }
 
-  // ─── InnerTube config extraction ──────────────────────────────────────────
-
-  function extractInnertubeConfig(html) {
-    const cfg = {
-      apiKey:        'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
-      clientVersion: '2.20240101.00.00',
-      visitorData:   ''
-    };
-
-    const ak = html.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/);
-    if (ak) cfg.apiKey = ak[1];
-
-    const cv = html.match(/"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"/);
-    if (cv) cfg.clientVersion = cv[1];
-
-    const vd = html.match(/"visitorData"\s*:\s*"([^"]+)"/);
-    if (vd) cfg.visitorData = vd[1];
-
-    return cfg;
-  }
-
-  // ─── ytInitialData extraction ──────────────────────────────────────────────
-
-  function extractYtInitialData(html) {
-    const marker    = 'var ytInitialData = ';
-    const startIdx  = html.indexOf(marker);
-    if (startIdx === -1) return null;
-
-    const jsonStr = extractBalancedJson(html, startIdx + marker.length);
-    if (!jsonStr) return null;
-
-    try {
-      return JSON.parse(jsonStr);
-    } catch (e) {
-      console.error('[WatchLaterNow] ytInitialData JSON parse failed:', e);
-      return null;
-    }
-  }
-
-  function extractBalancedJson(str, startIndex) {
-    let depth    = 0;
-    let inString = false;
-    let escape   = false;
-
-    for (let i = startIndex; i < str.length; i++) {
-      const ch = str[i];
-      if (escape)                       { escape = false; continue; }
-      if (ch === '\\' && inString)      { escape = true;  continue; }
-      if (ch === '"')                   { inString = !inString; continue; }
-      if (inString)                     continue;
-      if (ch === '{' || ch === '[')     depth++;
-      else if (ch === '}' || ch === ']') {
-        depth--;
-        if (depth === 0) return str.slice(startIndex, i + 1);
-      }
-    }
-    return null;
-  }
-
-  // ─── Extract videos from ytInitialData (first page) ───────────────────────
+  // ─── First response parser ──────────────────────────────────────────────────
   //
-  // BUG 3 FIX — three-path token search:
+  // The browse?browseId=VLWL response wraps the playlist several layers deep:
   //
-  // YouTube stores the continuation token in one of three locations depending
-  // on client version and playlist type:
+  //   data.contents
+  //     .twoColumnBrowseResultsRenderer.tabs[0]
+  //     .tabRenderer.content
+  //     .sectionListRenderer.contents[0]
+  //     .itemSectionRenderer.contents[0]
+  //     .playlistVideoListRenderer
+  //       .contents  ← videos + optional continuationItemRenderer
+  //       .continuations  ← legacy token array (alternate path)
   //
-  //   Path A: continuationItemRenderer embedded as the last element of
-  //     plRenderer.contents[].  Handled by parseItems().
-  //
-  //   Path B: plRenderer.continuations[].nextContinuationData.continuation
-  //     A separate array next to contents[].  This is the legacy format still
-  //     used for Watch Later on many YouTube configurations.
-  //
-  //   Path C: deepFind(plRenderer, 'continuationCommand').token
-  //     Fallback deep-search scoped to the playlist renderer.  Catches any
-  //     variant not covered by A or B (e.g. wrapped in extra renderer layers).
-  //
-  // Without B + C, the while-loop in scan() never executes for playlists whose
-  // initial page only has a Path B or C token — loading just the first ~100.
+  // We use deepFind() so nesting changes don't break us.
 
-  function extractVideosAndToken(ytData) {
-    const plRenderer = deepFind(ytData, 'playlistVideoListRenderer');
-    if (!plRenderer) {
-      console.warn('[WatchLaterNow] playlistVideoListRenderer not found in ytInitialData');
+  function parseFirstResponse(data) {
+    const plr = deepFind(data, 'playlistVideoListRenderer');
+    if (!plr) {
+      console.warn('[WatchLaterNow] playlistVideoListRenderer not found in browse response.');
+      console.warn('[WatchLaterNow] Response keys:', Object.keys(data || {}));
       return { videos: [], continuation: null };
     }
 
-    const { videos, continuation: pathA } = parseItems(plRenderer.contents || []);
+    const { videos, continuation: tokenA } = parseItems(plr.contents || []);
 
-    // Path B
-    const pathB = extractContinuationFromLegacyArray(plRenderer.continuations);
+    // Token can be in plr.continuations[] (legacy/alternate format)
+    const tokenB = extractLegacyToken(plr.continuations);
 
-    // Path C — deepFind scoped to plRenderer (avoids picking up unrelated tokens)
-    let pathC = null;
-    if (!pathA && !pathB) {
-      const cmd = deepFind(plRenderer, 'continuationCommand');
-      if (cmd?.token) pathC = cmd.token;
+    // Last-resort: deep search inside the playlist renderer itself
+    let tokenC = null;
+    if (!tokenA && !tokenB) {
+      const cmd = deepFind(plr, 'continuationCommand');
+      if (cmd?.token) tokenC = cmd.token;
     }
 
-    const continuation = pathA || pathB || pathC || null;
+    const continuation = tokenA || tokenB || tokenC || null;
 
     console.log(
-      '[WatchLaterNow] Token source:',
-      pathA ? 'Path A (continuationItemRenderer)' :
-      pathB ? 'Path B (plRenderer.continuations[])' :
-      pathC ? 'Path C (deepFind)' : 'none found'
+      '[WatchLaterNow] First page:', videos.length, 'videos |',
+      'token:', continuation
+        ? (tokenA ? 'Path A (continuationItemRenderer)'
+          : tokenB ? 'Path B (plr.continuations[])'
+          : 'Path C (deepFind)')
+        : 'NONE — playlist may be fully loaded'
     );
 
     return { videos, continuation };
   }
 
-  function extractContinuationFromLegacyArray(continuations) {
-    if (!Array.isArray(continuations) || continuations.length === 0) return null;
-    for (const c of continuations) {
-      const token =
-        c?.nextContinuationData?.continuation        ||
-        c?.nextRadioContinuationData?.continuation   ||
-        c?.liveChatReplayContinuationData?.continuation;
-      if (token) return token;
+  // ─── Continuation fetch ─────────────────────────────────────────────────────
+  //
+  // Continuation responses come in one of four shapes.  We check the most
+  // specific first (Shape A) and fall back to progressively broader searches.
+
+  async function fetchContinuation(token) {
+    const data = await browsePost({ continuation: token });
+
+    // Shape A — continuationContents.playlistVideoListContinuation
+    // Most specific; commonly returned for Watch Later.
+    const plc = data?.continuationContents?.playlistVideoListContinuation;
+    if (plc) {
+      const { videos, continuation: tokenA } = parseItems(plc.contents || []);
+      const tokenB = extractLegacyToken(plc.continuations);
+      return { videos, continuation: tokenA || tokenB || null };
     }
-    return null;
+
+    // Shape B — onResponseReceivedActions[].appendContinuationItemsAction
+    const actions = data?.onResponseReceivedActions || [];
+    for (const action of actions) {
+      const items =
+        action?.appendContinuationItemsAction?.continuationItems ||
+        action?.reloadContinuationItemsCommand?.continuationItems;
+      if (items) return parseItems(items);
+    }
+
+    // Shape C — top-level continuationItems
+    if (Array.isArray(data?.continuationItems)) {
+      return parseItems(data.continuationItems);
+    }
+
+    // Shape D — deep search (last resort)
+    const items = deepFind(data, 'continuationItems');
+    if (Array.isArray(items)) return parseItems(items);
+
+    // No items found — signals end of playlist
+    return { videos: [], continuation: null };
   }
 
-  // ─── Continuation page fetch ───────────────────────────────────────────────
+  // ─── Item parser ────────────────────────────────────────────────────────────
   //
-  // BUG 3 FIX — fourth response shape:
-  //
-  // YouTube's browse endpoint returns one of four shapes:
-  //
-  //   Shape 1 (standard): onResponseReceivedActions[].appendContinuationItemsAction
-  //     .continuationItems  — handled by existing Path 1 code.
-  //
-  //   Shape 2: top-level continuationItems array — handled by Path 2.
-  //
-  //   Shape 3: deep-search fallback — handled by Path 3.
-  //
-  //   Shape 4 (Watch Later on many YouTube configs): response.continuationContents
-  //     .playlistVideoListContinuation.{contents, continuations}
-  //     This was MISSING and caused early termination for 608-video playlists.
-  //
-  // Also: removed `?key=...` from the URL.  Newer YouTube versions return HTTP
-  // 400 when an API key is present in the URL query string.  The key is still
-  // sent via the X-Goog-Api-Key header (which YouTube does accept).
-
-  async function fetchContinuationPage(config, token) {
-    // API key must be in the URL query string.  YouTube returns HTTP 400 when
-    // the key is absent, even if it is also present in the X-Goog-Api-Key
-    // header.  Without a 200 response the loop breaks after page 1 (~100 videos).
-    const url = `https://www.youtube.com/youtubei/v1/browse?key=${encodeURIComponent(config.apiKey)}&prettyPrint=false`;
-
-    const body = {
-      context: {
-        client: {
-          clientName:    'WEB',
-          clientVersion: config.clientVersion,
-          hl:            'en',
-          gl:            'US',
-          ...(config.visitorData ? { visitorData: config.visitorData } : {})
-        }
-      },
-      continuation: token
-    };
-
-    try {
-      const resp = await fetch(url, {
-        method:      'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type':             'application/json',
-          'X-YouTube-Client-Name':    '1',
-          'X-YouTube-Client-Version': config.clientVersion,
-          'X-Goog-Api-Key':           config.apiKey,
-          'Origin':                   'https://www.youtube.com',
-          'Referer':                  PLAYLIST_URL
-        },
-        body: JSON.stringify(body)
-      });
-
-      if (!resp.ok) {
-        console.warn('[WatchLaterNow] Continuation request failed HTTP', resp.status);
-        return null;
-      }
-
-      const data = await resp.json();
-
-      // ── Shape 4 (BUG 3 FIX) ───────────────────────────────────────────────
-      // Check this FIRST because it's the most specific shape — if it matches
-      // we know exactly what to do without any ambiguity.
-      const plCont = data?.continuationContents?.playlistVideoListContinuation;
-      if (plCont) {
-        const { videos, continuation: pathA } = parseItems(plCont.contents || []);
-        const pathB = extractContinuationFromLegacyArray(plCont.continuations);
-        return { videos, continuation: pathA || pathB || null };
-      }
-
-      // ── Shape 1: onResponseReceivedActions ────────────────────────────────
-      let items = null;
-      const actions = data?.onResponseReceivedActions || [];
-      for (const action of actions) {
-        const ci =
-          action?.appendContinuationItemsAction?.continuationItems ||
-          action?.reloadContinuationItemsCommand?.continuationItems;
-        if (ci) { items = ci; break; }
-      }
-
-      // ── Shape 2: top-level continuationItems ─────────────────────────────
-      if (!items && Array.isArray(data?.continuationItems)) {
-        items = data.continuationItems;
-      }
-
-      // ── Shape 3: deep-search fallback ─────────────────────────────────────
-      if (!items) items = deepFind(data, 'continuationItems');
-
-      if (!items || !Array.isArray(items)) {
-        return { videos: [], continuation: null };
-      }
-
-      return parseItems(items);
-
-    } catch (e) {
-      console.error('[WatchLaterNow] Continuation fetch error:', e);
-      return null;
-    }
-  }
-
-  // ─── Parse a list of playlist items ───────────────────────────────────────
+  // Walks a raw contents[] array and extracts:
+  //   • VideoRecord objects from playlistVideoRenderer entries
+  //   • The next continuation token from continuationItemRenderer
 
   function parseItems(items) {
     const videos = [];
     let continuation = null;
 
     for (const item of items) {
-      // Video entry
+      // ── Video ──────────────────────────────────────────────────────────────
       const v = item?.playlistVideoRenderer;
       if (v?.videoId) {
-        // Skip unavailable videos (no title / marked as private/deleted)
-        const title = getText(v.title) || '';
-        if (!title && !v.thumbnail?.thumbnails?.length) continue; // truly unavailable
+        const title = getText(v.title);
+        // Skip videos with no title AND no thumbnail (private/deleted)
+        if (!title && !v.thumbnail?.thumbnails?.length) continue;
 
         videos.push({
-          videoId:  v.videoId,
-          title:    title || 'Untitled',
-          channel:  getText(v.shortBylineText) || getText(v.longBylineText) || '',
-          duration: v.lengthText?.simpleText || v.lengthText?.runs?.[0]?.text || '',
+          videoId:   v.videoId,
+          title:     title || 'Untitled',
+          channel:   getText(v.shortBylineText) || getText(v.longBylineText) || '',
+          duration:  v.lengthText?.simpleText   || getText(v.lengthText)     || '',
           thumbnail: bestThumbnail(v.thumbnail?.thumbnails, v.videoId),
           videoUrl:  `https://www.youtube.com/watch?v=${v.videoId}`
         });
       }
 
-      // Continuation token
+      // ── Continuation token ─────────────────────────────────────────────────
       const cont = item?.continuationItemRenderer;
       if (cont) {
         const tok =
@@ -356,25 +246,90 @@ window.WatchNowScanner = (() => {
     return { videos, continuation };
   }
 
-  // ─── Helpers ───────────────────────────────────────────────────────────────
+  // ─── Core API call ──────────────────────────────────────────────────────────
+  //
+  // All requests share the same context block.  Extra fields (browseId or
+  // continuation) are spread in by the caller.
+  //
+  // credentials:'include' sends the user's YouTube session cookies so the
+  // Watch Later playlist (which is private) is accessible.
 
+  async function browsePost(bodyExtra) {
+    const body = {
+      context: {
+        client: {
+          clientName:    CLIENT_NAME,
+          clientVersion: CLIENT_VER,
+          hl:            'en',
+          gl:            'US'
+        }
+      },
+      ...bodyExtra
+    };
+
+    const resp = await fetch(BROWSE_URL, {
+      method:      'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type':             'application/json',
+        'X-YouTube-Client-Name':    '1',
+        'X-YouTube-Client-Version': CLIENT_VER,
+        'Origin':                   'https://www.youtube.com',
+        'Referer':                  'https://www.youtube.com/'
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!resp.ok) {
+      throw new Error(`YouTube API returned HTTP ${resp.status}`);
+    }
+
+    return resp.json();
+  }
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
+
+  // Extract a token from the legacy continuations[] array format.
+  function extractLegacyToken(continuations) {
+    if (!Array.isArray(continuations)) return null;
+    for (const c of continuations) {
+      const tok =
+        c?.nextContinuationData?.continuation ||
+        c?.nextRadioContinuationData?.continuation;
+      if (tok) return tok;
+    }
+    return null;
+  }
+
+  // Extract plain text from YouTube's various text object shapes.
   function getText(obj) {
-    if (!obj) return '';
+    if (!obj)                    return '';
     if (typeof obj === 'string') return obj;
-    if (obj.simpleText) return obj.simpleText;
-    if (obj.runs) return obj.runs.map(r => r.text || '').join('');
+    if (obj.simpleText)          return obj.simpleText;
+    if (Array.isArray(obj.runs)) return obj.runs.map(r => r.text || '').join('');
     return '';
   }
 
+  // Pick the thumbnail URL closest to 320px wide (mqdefault quality).
   function bestThumbnail(thumbs, videoId) {
     const fallback = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
-    if (!thumbs || thumbs.length === 0) return fallback;
+    if (!thumbs?.length) return fallback;
     const sorted = [...thumbs].sort(
       (a, b) => Math.abs((a.width || 0) - 320) - Math.abs((b.width || 0) - 320)
     );
     return sorted[0]?.url || fallback;
   }
 
+  // Stamp addedAt timestamps by playlist position.
+  // index 0 = most recently added (newest first in the default sort).
+  function stampAddedAt(videos, startIndex) {
+    const now = Date.now();
+    videos.forEach((v, i) => {
+      v.addedAt = now - (startIndex + i) * 1000;
+    });
+  }
+
+  // Recursive deep object search for a key, capped at depth 50.
   function deepFind(obj, key, depth = 0) {
     if (depth > 50 || obj === null || typeof obj !== 'object') return undefined;
     if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
@@ -385,23 +340,11 @@ window.WatchNowScanner = (() => {
     return undefined;
   }
 
-  async function safeFetch(url) {
-    try {
-      const resp = await fetch(url, {
-        credentials: 'include',
-        headers: { 'Accept-Language': 'en-US,en;q=0.9' }
-      });
-      if (!resp.ok) return null;
-      return await resp.text();
-    } catch (e) {
-      console.error('[WatchLaterNow] safeFetch failed:', url, e);
-      return null;
-    }
-  }
-
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
+
+  // ─── Public API ─────────────────────────────────────────────────────────────
 
   return { scan };
 })();

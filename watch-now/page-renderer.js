@@ -329,8 +329,22 @@ window.WatchNowPage = (() => {
     showProgress(5, 'Starting…');
 
     try {
-      const { videos } = await WatchNowScanner.scan((pct, msg) => showProgress(pct, msg));
+      // onFirstBatch fires after the first API response (~100 videos).
+      // We save and render immediately so the user sees content right away
+      // without waiting for all 600+ pages to finish loading.
+      const onFirstBatch = async (firstVideos) => {
+        if (!db) db = await WatchNowDB.load();
+        db = WatchNowDB.replaceAll(db, firstVideos);
+        WatchNowDB.save(db); // fire-and-forget; full save happens below
+        renderVideos();
+      };
 
+      const { videos } = await WatchNowScanner.scan(
+        (pct, msg) => showProgress(pct, msg),
+        onFirstBatch
+      );
+
+      // Full playlist loaded — save complete list and re-render
       if (!db) db = await WatchNowDB.load();
       db = WatchNowDB.replaceAll(db, videos);
       await WatchNowDB.save(db);
