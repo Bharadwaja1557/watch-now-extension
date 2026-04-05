@@ -1,7 +1,7 @@
 // watch-now/page-renderer.js
 // Orchestrates the Watch Now page:
-//   - Builds the DOM structure
-//   - Wires up controls (search, sort, filter)
+//   - Builds the DOM structure inside YouTube's #page-manager
+//   - Wires up controls (search, sort, filter, surprise, rescan)
 //   - Runs the scanner and saves results
 //   - Delegates grid rendering to WatchNowVideoGrid
 
@@ -39,37 +39,31 @@ window.WatchNowPage = (() => {
   }
 
   // ─── DOM construction ──────────────────────────────────────────────────────
+  //
+  // BUG 1 FIX — layout approach change:
+  //
+  // Previous approach used position:fixed with z-index:1800, then tried to
+  // measure the chips-bar height to calculate `top`.  This was fragile because:
+  //   • The chips bar has z-index:2290 on YouTube (same as navbar/drawer) so
+  //     our 1800 overlay always painted BEHIND it.
+  //   • YouTube SPA re-injects chips-bar elements after navigation, so the
+  //     one-shot forceHideChipsBars() call didn't cover new elements.
+  //
+  // New approach:
+  //   • Inject #wln-page directly into #page-manager (position:absolute inset:0).
+  //   • #page-manager is already correctly positioned by YouTube:
+  //       top:56px (below navbar), margin-left:72px or 240px (past sidebar).
+  //   • The chips bar lives inside ytd-browse, which our CSS hides with
+  //     display:none.  So the chips bar disappears automatically — no z-index
+  //     battles needed.
+  //   • No JavaScript measurement required at all.
 
   function buildPageStructure() {
-    // Remove any existing instance
     const existing = document.getElementById('wln-page');
     if (existing) existing.remove();
 
-    // ── BUG 1 FIX: measure vertical offset ───────────────────────────────────
-    // We cannot use navbar.getBoundingClientRect().height because the YouTube
-    // topics/chips bar (ytd-feed-filter-chip-bar-renderer) lives BELOW the
-    // navbar with position:sticky and is NOT part of #masthead-container.
-    // Instead we read #page-manager.getBoundingClientRect().top — this always
-    // equals the distance from the viewport top to where real content begins,
-    // naturally accounting for the navbar AND any sticky bars below it.
-    const pm = document.getElementById('page-manager');
-    const navH = pm
-      ? Math.max(Math.round(pm.getBoundingClientRect().top), 56)
-      : 56;
-
-    // ── BUG 2 FIX: measure horizontal offset ─────────────────────────────────
-    // YouTube's #page-manager always has margin-left:72px (mini-guide width).
-    // When the FULL 240px guide drawer is open it overlays #page-manager at a
-    // higher z-index — pm.getBoundingClientRect().left stays at 72px even
-    // though the guide covers 0-240px.  We must read the guide drawer's actual
-    // right edge so our overlay never starts underneath the sidebar.
-    const contentLeft = measureGuideRight();
-
-    // Root page element (fixed overlay starting after the sidebar)
     const page = document.createElement('div');
-    page.id           = 'wln-page';
-    page.style.top    = navH + 'px';
-    page.style.left   = contentLeft + 'px';
+    page.id = 'wln-page';
 
     // ── Top bar ──────────────────────────────────────────────────────────────
     const topbar = document.createElement('div');
@@ -99,9 +93,9 @@ window.WatchNowPage = (() => {
     searchWrap.appendChild(searchIcon);
 
     const searchInput = document.createElement('input');
-    searchInput.id          = 'wln-search';
-    searchInput.type        = 'text';
-    searchInput.placeholder = 'Search titles and channels…';
+    searchInput.id           = 'wln-search';
+    searchInput.type         = 'text';
+    searchInput.placeholder  = 'Search titles and channels…';
     searchInput.autocomplete = 'off';
     searchWrap.appendChild(searchInput);
 
@@ -122,12 +116,12 @@ window.WatchNowPage = (() => {
     const sortSelect = document.createElement('select');
     sortSelect.id = 'wln-sort';
     const sortOptions = [
-      { value: 'newest',  label: 'Newest first'  },
-      { value: 'oldest',  label: 'Oldest first'  },
+      { value: 'newest',   label: 'Newest first'   },
+      { value: 'oldest',   label: 'Oldest first'   },
       { value: 'shortest', label: 'Shortest first' },
-      { value: 'longest', label: 'Longest first'  },
-      { value: 'alpha',   label: 'Alphabetical'  },
-      { value: 'random',  label: 'Randomize'     }
+      { value: 'longest',  label: 'Longest first'  },
+      { value: 'alpha',    label: 'Alphabetical'   },
+      { value: 'random',   label: 'Randomize'      }
     ];
     for (const opt of sortOptions) {
       const o = document.createElement('option');
@@ -142,13 +136,20 @@ window.WatchNowPage = (() => {
     toggle.id = 'wln-watch-toggle';
     for (const [status, label] of [['all', 'All'], ['unwatched', 'Unwatched'], ['watched', 'Watched']]) {
       const btn = document.createElement('button');
-      btn.type              = 'button';
-      btn.className         = 'wln-toggle-btn' + (status === 'all' ? ' active' : '');
-      btn.dataset.status    = status;
-      btn.textContent       = label;
+      btn.type           = 'button';
+      btn.className      = 'wln-toggle-btn' + (status === 'all' ? ' active' : '');
+      btn.dataset.status = status;
+      btn.textContent    = label;
       toggle.appendChild(btn);
     }
     rightControls.appendChild(toggle);
+
+    // BUG 2 FIX — Surprise Me button (was missing from previous rebuild)
+    const surpriseBtn = document.createElement('button');
+    surpriseBtn.id          = 'wln-surprise-btn';
+    surpriseBtn.type        = 'button';
+    surpriseBtn.textContent = 'Surprise 🎲';
+    rightControls.appendChild(surpriseBtn);
 
     // Rescan button
     const rescanBtn = document.createElement('button');
@@ -175,6 +176,10 @@ window.WatchNowPage = (() => {
     contentArea.id = 'wln-content-area';
     page.appendChild(contentArea);
 
+    // Append to body — #wln-page is position:fixed so it is independent
+    // of any ancestor's layout.  We previously injected into #page-manager
+    // but that element is position:static, which caused our position:absolute
+    // child to resolve to a distant ancestor and land behind the masthead.
     document.body.appendChild(page);
   }
 
@@ -187,7 +192,6 @@ window.WatchNowPage = (() => {
     const allVideos = WatchNowDB.getAllVideos(db);
     const filtered  = WatchNowFilters.applyAll(allVideos, state);
 
-    // Counter
     const counter = document.getElementById('wln-video-counter');
     if (counter) {
       const stats = WatchNowDB.getStats(db);
@@ -196,7 +200,6 @@ window.WatchNowPage = (() => {
         `(${stats.total} total · ${stats.watched} watched · ${stats.unwatched} unwatched)`;
     }
 
-    // Replace grid content
     area.innerHTML = '';
     const grid = WatchNowVideoGrid.render(filtered, handleMarkWatched, area);
     area.appendChild(grid);
@@ -207,7 +210,6 @@ window.WatchNowPage = (() => {
     await WatchNowDB.save(db);
     WatchNowVideoGrid.updateCard(videoId, watched);
 
-    // Update counter without re-rendering the whole grid
     const counter = document.getElementById('wln-video-counter');
     if (counter) {
       const allVideos = WatchNowDB.getAllVideos(db);
@@ -227,10 +229,10 @@ window.WatchNowPage = (() => {
 
     area.innerHTML = '';
 
-    const wrap = document.createElement('div');
+    const wrap  = document.createElement('div');
     wrap.className = 'wln-empty-state';
 
-    const icon = document.createElement('div');
+    const icon  = document.createElement('div');
     icon.className   = 'wln-empty-icon';
     icon.textContent = '📋';
 
@@ -238,11 +240,11 @@ window.WatchNowPage = (() => {
     title.className   = 'wln-empty-title';
     title.textContent = 'Watch Later not scanned yet';
 
-    const sub = document.createElement('div');
+    const sub   = document.createElement('div');
     sub.className   = 'wln-empty-sub';
     sub.textContent = 'Import your Watch Later playlist to get started';
 
-    const btn = document.createElement('button');
+    const btn   = document.createElement('button');
     btn.id          = 'wln-initial-scan-btn';
     btn.type        = 'button';
     btn.className   = 'wln-cta-btn';
@@ -259,7 +261,7 @@ window.WatchNowPage = (() => {
   // ─── Controls ──────────────────────────────────────────────────────────────
 
   function attachControlListeners() {
-    // Search — debounced 250ms
+    // Search — debounced 250 ms
     let searchTimer;
     document.getElementById('wln-search')?.addEventListener('input', e => {
       clearTimeout(searchTimer);
@@ -291,6 +293,21 @@ window.WatchNowPage = (() => {
       btn.classList.add('active');
       state.watchStatus = btn.dataset.status;
       renderVideos();
+    });
+
+    // BUG 2 FIX — Surprise Me listener
+    // Picks a random video from the currently filtered & sorted set.
+    // When watchStatus==='unwatched' the filtered set is already unwatched-only.
+    document.getElementById('wln-surprise-btn')?.addEventListener('click', () => {
+      if (!db) return;
+      const allVideos = WatchNowDB.getAllVideos(db);
+      const filtered  = WatchNowFilters.applyAll(allVideos, state);
+      if (filtered.length === 0) {
+        showToast('No videos to pick from!');
+        return;
+      }
+      const pick = filtered[Math.floor(Math.random() * filtered.length)];
+      window.open(`https://www.youtube.com/watch?v=${pick.videoId}`, '_blank');
     });
 
     // Rescan
@@ -388,42 +405,6 @@ window.WatchNowPage = (() => {
       toast.classList.remove('wln-toast-visible');
       setTimeout(() => toast.remove(), 300);
     }, 3500);
-  }
-
-  // ─── Layout measurement helpers ────────────────────────────────────────────
-
-  // Returns the pixel offset from the left viewport edge at which our content
-  // should begin — i.e. the right edge of whatever sidebar YouTube is showing.
-  //
-  // YouTube has two guide modes that run simultaneously:
-  //   • tp-yt-app-drawer  — full 240px drawer, position:fixed, can be open/closed
-  //   • #mini-guide       — 72px mini bar, always visible when guide is enabled
-  //
-  // #page-manager always has margin-left:72px regardless of drawer state, so
-  // pm.getBoundingClientRect().left is NOT a reliable source for the full guide.
-  function measureGuideRight() {
-    // Full guide drawer: getBoundingClientRect() accounts for CSS transforms,
-    // so when it is translated off-screen its .right is ≤ 0.
-    const drawer = document.querySelector('tp-yt-app-drawer');
-    if (drawer) {
-      const r = drawer.getBoundingClientRect();
-      if (r.right > 10) return Math.round(r.right); // drawer is open
-    }
-
-    // Mini guide fallback (72px)
-    const mini =
-      document.querySelector('#mini-guide') ||
-      document.querySelector('ytd-mini-guide-renderer');
-    if (mini) {
-      const r = mini.getBoundingClientRect();
-      if (r.right > 0) return Math.round(r.right);
-    }
-
-    // Last resort: page-manager left edge
-    const pm = document.getElementById('page-manager');
-    if (pm) return Math.round(pm.getBoundingClientRect().left);
-
-    return 0;
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────

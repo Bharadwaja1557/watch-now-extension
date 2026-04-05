@@ -3,7 +3,7 @@
 //
 // Responsibilities:
 //   1. Detect yt-navigate-finish events and render/teardown the Watch Now page
-//   2. Inject the "Watch Now" sidebar button below "Watch Later"
+//   2. Inject the "Watch Now" sidebar button (🔥) below "Watch Later"
 //   3. Keep YouTube's native sidebar and header completely intact
 
 (function () {
@@ -20,13 +20,10 @@
     waitForElement('ytd-app', () => {
       setupNavigationListener();
       checkAndActivate();
-
-      // Inject sidebar button after YouTube's guide has rendered
       injectSidebarButtonWhenReady();
     });
   }
 
-  // Poll until selector appears, then call callback.
   function waitForElement(selector, callback, maxMs = 15000) {
     const el = document.querySelector(selector);
     if (el) { callback(el); return; }
@@ -45,12 +42,9 @@
   // ─── Navigation ────────────────────────────────────────────────────────────
 
   function setupNavigationListener() {
-    // YouTube's primary SPA navigation event
     document.addEventListener('yt-navigate-finish', onNavigate);
-    // Fallback for popstate / hashchange
     window.addEventListener('popstate', onNavigate);
 
-    // URL-polling fallback (some YouTube navigations don't fire the above)
     let lastUrl = location.href;
     setInterval(() => {
       if (location.href !== lastUrl) {
@@ -71,7 +65,6 @@
       deactivateWatchNow();
     }
 
-    // Re-inject sidebar button after YouTube re-renders its guide
     setTimeout(injectSidebarButtonWhenReady, 800);
   }
 
@@ -90,7 +83,10 @@
 
   function activateWatchNow() {
     document.body.classList.add('wln-active');
-    WatchNowPage.mount();
+    // Mount on the next animation frame so the CSS class (which hides ytd-browse
+    // and therefore the chips bar) has been committed to layout before
+    // page-renderer.js injects into #page-manager and reads its dimensions.
+    requestAnimationFrame(() => WatchNowPage.mount());
   }
 
   function deactivateWatchNow() {
@@ -100,15 +96,12 @@
 
   // ─── Sidebar button injection ──────────────────────────────────────────────
 
-  // Try to inject the sidebar button; if the guide isn't rendered yet, retry.
   function injectSidebarButtonWhenReady() {
-    if (document.getElementById('wln-sidebar-btn')) return; // already injected
+    if (document.getElementById('wln-sidebar-btn')) return;
 
     const watchLaterItem = findWatchLaterGuideItem();
     if (!watchLaterItem) {
-      // Guide not rendered yet — wait for it
       waitForElement('ytd-guide-entry-renderer', () => {
-        // Give YouTube a moment to finish rendering the full list
         setTimeout(attemptSidebarInjection, 300);
       }, 8000);
       return;
@@ -121,19 +114,16 @@
     if (document.getElementById('wln-sidebar-btn')) return;
     const item = findWatchLaterGuideItem();
     if (item) injectAfter(item);
-    else setTimeout(attemptSidebarInjection, 1000); // keep retrying
+    else setTimeout(attemptSidebarInjection, 1000);
   }
 
-  // Find the ytd-guide-entry-renderer that corresponds to "Watch Later".
   function findWatchLaterGuideItem() {
-    // Strategy 1: find via the WL playlist link
     const wlLink = document.querySelector('a[href*="playlist?list=WL"]');
     if (wlLink) {
       const entry = wlLink.closest('ytd-guide-entry-renderer');
       if (entry) return entry;
     }
 
-    // Strategy 2: scan guide entry text content
     const entries = document.querySelectorAll('ytd-guide-entry-renderer');
     for (const entry of entries) {
       if (entry.textContent.includes('Watch later')) return entry;
@@ -142,40 +132,32 @@
     return null;
   }
 
-  // Build and insert the "Watch Now" sidebar entry directly after watchLaterItem.
   function injectAfter(watchLaterItem) {
     if (document.getElementById('wln-sidebar-btn')) return;
 
     const parent = watchLaterItem.parentNode;
     if (!parent) return;
 
-    // Build a <div> that mimics ytd-guide-entry-renderer visually
     const container = document.createElement('div');
     container.id = 'wln-sidebar-btn';
 
-    // Anchor — clicking navigates to the Watch Now page
     const anchor = document.createElement('a');
     anchor.href      = WATCH_NOW_URL;
     anchor.className = 'wln-guide-anchor';
 
-    // Prevent YouTube's router from intercepting the click on a custom element
     anchor.addEventListener('click', e => {
       e.preventDefault();
       e.stopPropagation();
       window.location.href = WATCH_NOW_URL;
     });
 
-    // Inner layout: icon + label (mirrors YouTube's guide entry structure)
     const inner = document.createElement('div');
     inner.className = 'wln-guide-inner';
 
-    // Play icon (matching YouTube's 24×24 icon size in the guide)
+    // BUG 5 FIX — use 🔥 emoji instead of SVG play icon
     const iconWrap = document.createElement('div');
-    iconWrap.className = 'wln-guide-icon';
-    iconWrap.innerHTML =
-      '<svg viewBox="0 0 24 24" width="24" height="24" focusable="false">' +
-        '<path fill="currentColor" d="M8 5v14l11-7z"/>' +
-      '</svg>';
+    iconWrap.className   = 'wln-guide-icon';
+    iconWrap.textContent = '🔥';
 
     const label = document.createElement('span');
     label.className   = 'wln-guide-label';
@@ -186,7 +168,6 @@
     anchor.appendChild(inner);
     container.appendChild(anchor);
 
-    // Insert directly after the Watch Later item
     parent.insertBefore(container, watchLaterItem.nextSibling);
   }
 

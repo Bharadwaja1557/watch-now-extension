@@ -1,21 +1,17 @@
 /* ============================================================
    Watch Later Now — styles/watch-now.css
-   Renders the Watch Now page inside YouTube's existing layout.
-   YouTube's header and sidebar are kept fully intact.
    ============================================================ */
 
 /* ── CSS Variables ──────────────────────────────────────────── */
 :root {
-  --wln-bg:           var(--yt-spec-base-background,        #fff);
-  --wln-surface:      var(--yt-spec-raised-background,      #f2f2f2);
-  --wln-border:       var(--yt-spec-10-percent-layer,       rgba(0,0,0,0.1));
-  --wln-text:         var(--yt-spec-text-primary,           #0f0f0f);
-  --wln-text-muted:   var(--yt-spec-text-secondary,         #606060);
-  --wln-accent:       #ff0000;
-  --wln-accent-soft:  rgba(255,0,0,0.08);
-  --wln-radius:       8px;
-  --wln-transition:   0.15s ease;
-  --wln-nav-height:   56px; /* overridden in JS */
+  --wln-bg:          var(--yt-spec-base-background,    #fff);
+  --wln-surface:     var(--yt-spec-raised-background,  #f2f2f2);
+  --wln-border:      var(--yt-spec-10-percent-layer,   rgba(0,0,0,0.1));
+  --wln-text:        var(--yt-spec-text-primary,       #0f0f0f);
+  --wln-text-muted:  var(--yt-spec-text-secondary,     #606060);
+  --wln-accent:      #ff0000;
+  --wln-radius:      8px;
+  --wln-transition:  0.15s ease;
 }
 
 html[dark] {
@@ -26,12 +22,15 @@ html[dark] {
   --wln-text-muted: #aaa;
 }
 
-/* ── Hide YouTube's page content (keep sidebar + header intact) ─ */
-/* We hide only what lives inside #page-manager so the sidebar
-   (which is a sibling to #page-manager) remains visible.
-   The chips/topics bar is hidden here as a belt-and-suspenders
-   measure; the JS offset calculation no longer relies on it being
-   hidden before measurement (it reads #page-manager.top instead). */
+/* ── Hide YouTube page content while Watch Now is active ────── */
+/* We hide only what lives INSIDE #page-manager.
+   The sidebar (tp-yt-app-drawer / #mini-guide) and the navbar
+   (#masthead-container) are siblings of #page-manager, so they
+   are UNAFFECTED by these rules and remain fully visible.
+
+   ytd-feed-filter-chip-bar-renderer (the topics/chips bar) lives
+   inside ytd-browse, so hiding ytd-browse also hides the chips bar.
+   This is the core of the BUG 1 FIX — no z-index battle needed.  */
 body.wln-active ytd-browse,
 body.wln-active ytd-watch-flexy,
 body.wln-active ytd-search,
@@ -39,180 +38,217 @@ body.wln-active ytd-two-column-browse-results-renderer,
 body.wln-active ytd-rich-grid-renderer,
 body.wln-active ytd-feed-filter-chip-bar-renderer,
 body.wln-active #chips-wrapper,
+body.wln-active yt-chip-cloud-renderer,
+body.wln-active #chip-bar,
 body.wln-active ytd-rich-section-renderer,
 body.wln-active ytd-statement-banner-renderer {
   display: none !important;
 }
 
-/* ── Watch Now page overlay ──────────────────────────────────── */
+/* ── Watch Now page — position:fixed overlay ─────────────────── */
+/*
+   Bug 1 root cause (previous attempt):
+     position:absolute;inset:0 was injected into #page-manager, but
+     YouTube gives #page-manager position:static (no value in its own
+     CSS).  A position:absolute child of a static element resolves to
+     the nearest POSITIONED ancestor — typically ytd-app or the document
+     root — so inset:0 placed our page at y=0, directly behind the
+     position:fixed masthead (z-index:2200).  The controls were invisible
+     because the masthead covered them.  The "appears on window resize"
+     symptom confirmed it: YouTube sometimes sets position:relative on
+     #page-manager during a resize, making our overlay momentarily visible.
+
+   Fix:
+     Use position:fixed on document.body (not inside #page-manager).
+     This is independent of any ancestor's position value.
+
+     Offset via YouTube's own CSS variables so no JS measurement is needed:
+       --ytd-masthead-height   → how tall the top navbar is  (default 56px)
+       --ytd-mini-guide-width  → width of the collapsed sidebar (default 72px)
+
+     z-index:2100 places us:
+       • ABOVE the topics/chips bar  (sticky, z-index ≈ 1000)
+       • ABOVE ytd-browse content    (in-flow, z-index 0)
+       • BELOW the guide drawer      (position:fixed, z-index ≈ 2290)
+       • BELOW the masthead          (position:fixed, z-index ≈ 2200)
+     so the sidebar and top navbar remain fully visible.
+*/
 #wln-page {
   position: fixed;
-  /* top  = set by JS: #page-manager.getBoundingClientRect().top
-            → correct vertical start regardless of topics bar     */
-  /* left = set by JS: right edge of guide drawer or mini-guide
-            → correct horizontal start regardless of sidebar mode */
-  top:    56px;  /* JS overrides this immediately */
-  left:   0;     /* JS overrides this immediately */
+  top:    var(--ytd-masthead-height,  56px);
+  left:   var(--ytd-mini-guide-width, 72px);
   right:  0;
   bottom: 0;
 
-  display: flex;
+  display:        flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow:       hidden;
 
-  background: var(--wln-bg);
-  color:      var(--wln-text);
+  background:  var(--wln-bg);
+  color:       var(--wln-text);
   font-family: "Roboto", "Arial", sans-serif;
-  font-size: 14px;
-
-  /* Must be above page content (ytd-browse etc, z≈0) but below
-     YouTube's guide drawer (tp-yt-app-drawer, z≈2290) so the
-     sidebar continues to render on top of our overlay.           */
-  z-index: 500;
+  font-size:   14px;
+  z-index:     2100;
 
   animation: wln-fadein 0.18s ease both;
 }
 
 /* ── Top bar ─────────────────────────────────────────────────── */
 #wln-topbar {
-  flex-shrink: 0;
-  background:  var(--wln-bg);
+  flex-shrink:   0;
+  background:    var(--wln-bg);
   border-bottom: 1px solid var(--wln-border);
-  padding: 12px 24px 10px;
-  z-index: 10;
+  padding:       12px 24px 10px;
 }
 
 #wln-controls-row {
-  display: flex;
+  display:     flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap:         10px;
+  flex-wrap:   wrap;
 }
 
 /* Search */
 #wln-search-wrap {
-  position: relative;
-  display: flex;
+  position:   relative;
+  display:    flex;
   align-items: center;
-  flex: 1;
-  min-width: 180px;
-  max-width: 460px;
+  flex:       1;
+  min-width:  180px;
+  max-width:  420px;
   background: var(--wln-surface);
-  border: 1px solid var(--wln-border);
+  border:     1px solid var(--wln-border);
   border-radius: 40px;
+  overflow:   hidden;
   transition: border-color var(--wln-transition), box-shadow var(--wln-transition);
-  overflow: hidden;
 }
 
 #wln-search-wrap:focus-within {
   border-color: var(--wln-accent);
-  box-shadow: 0 0 0 1px var(--wln-accent);
+  box-shadow:   0 0 0 1px var(--wln-accent);
 }
 
 .wln-search-icon {
-  position: absolute;
-  left: 13px;
-  color: var(--wln-text-muted);
+  position:       absolute;
+  left:           13px;
+  color:          var(--wln-text-muted);
   pointer-events: none;
-  flex-shrink: 0;
+  flex-shrink:    0;
 }
 
 #wln-search {
-  flex: 1;
-  border: none;
+  flex:       1;
+  border:     none;
   background: transparent;
-  color: var(--wln-text);
-  font-size: 14px;
-  padding: 9px 34px 9px 40px;
-  outline: none;
-  width: 100%;
+  color:      var(--wln-text);
+  font-size:  14px;
+  padding:    9px 34px 9px 40px;
+  outline:    none;
+  width:      100%;
 }
 
-#wln-search::placeholder {
-  color: var(--wln-text-muted);
-}
+#wln-search::placeholder { color: var(--wln-text-muted); }
 
 #wln-search-clear {
   background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--wln-text-muted);
-  padding: 0 12px;
-  font-size: 14px;
+  border:     none;
+  cursor:     pointer;
+  color:      var(--wln-text-muted);
+  padding:    0 12px;
+  font-size:  14px;
   line-height: 1;
   transition: color var(--wln-transition);
 }
 #wln-search-clear:hover { color: var(--wln-text); }
 
-/* Right controls */
+/* Right controls group */
 #wln-right-controls {
-  display: flex;
+  display:     flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap:         8px;
+  flex-wrap:   wrap;
   flex-shrink: 0;
 }
 
 /* Sort select */
 #wln-sort {
-  background: var(--wln-surface);
-  border: 1px solid var(--wln-border);
+  background:    var(--wln-surface);
+  border:        1px solid var(--wln-border);
   border-radius: var(--wln-radius);
-  color: var(--wln-text);
-  font-size: 13px;
-  padding: 7px 11px;
-  cursor: pointer;
-  outline: none;
-  transition: border-color var(--wln-transition);
+  color:         var(--wln-text);
+  font-size:     13px;
+  font-family:   inherit;
+  padding:       7px 11px;
+  cursor:        pointer;
+  outline:       none;
+  transition:    border-color var(--wln-transition);
 }
 #wln-sort:hover,
 #wln-sort:focus { border-color: var(--wln-text-muted); }
 
 /* Watch status toggle */
 #wln-watch-toggle {
-  display: flex;
-  border: 1px solid var(--wln-border);
+  display:       flex;
+  border:        1px solid var(--wln-border);
   border-radius: var(--wln-radius);
-  overflow: hidden;
+  overflow:      hidden;
 }
 
 .wln-toggle-btn {
-  background: var(--wln-surface);
-  border: none;
+  background:   var(--wln-surface);
+  border:       none;
   border-right: 1px solid var(--wln-border);
-  color: var(--wln-text-muted);
-  font-size: 12px;
-  font-family: inherit;
-  padding: 7px 12px;
-  cursor: pointer;
-  transition: background var(--wln-transition), color var(--wln-transition);
-  white-space: nowrap;
+  color:        var(--wln-text-muted);
+  font-size:    12px;
+  font-family:  inherit;
+  padding:      7px 12px;
+  cursor:       pointer;
+  transition:   background var(--wln-transition), color var(--wln-transition);
+  white-space:  nowrap;
 }
 .wln-toggle-btn:last-child { border-right: none; }
 .wln-toggle-btn:hover {
   background: var(--wln-border);
-  color: var(--wln-text);
+  color:      var(--wln-text);
 }
 .wln-toggle-btn.active {
-  background: var(--wln-text);
-  color: var(--wln-bg);
+  background:  var(--wln-text);
+  color:       var(--wln-bg);
   font-weight: 600;
 }
 
+/* BUG 2 — Surprise Me button */
+#wln-surprise-btn {
+  background:    var(--wln-surface);
+  border:        1px solid var(--wln-border);
+  border-radius: var(--wln-radius);
+  color:         var(--wln-text);
+  font-family:   inherit;
+  font-size:     13px;
+  font-weight:   500;
+  padding:       7px 14px;
+  cursor:        pointer;
+  transition:    background var(--wln-transition), border-color var(--wln-transition),
+                 transform 0.1s ease;
+  white-space:   nowrap;
+}
+#wln-surprise-btn:hover  { background: var(--wln-accent); border-color: var(--wln-accent); color: #fff; }
+#wln-surprise-btn:active { transform: scale(0.97); }
+
 /* Rescan button */
 #wln-rescan-btn {
-  background: var(--wln-surface);
-  border: 1px solid var(--wln-border);
+  background:    var(--wln-surface);
+  border:        1px solid var(--wln-border);
   border-radius: var(--wln-radius);
-  color: var(--wln-text);
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 7px 14px;
-  cursor: pointer;
-  transition: background var(--wln-transition), border-color var(--wln-transition),
-              transform 0.1s ease;
-  white-space: nowrap;
+  color:         var(--wln-text);
+  font-family:   inherit;
+  font-size:     13px;
+  font-weight:   500;
+  padding:       7px 14px;
+  cursor:        pointer;
+  transition:    background var(--wln-transition), border-color var(--wln-transition),
+                 transform 0.1s ease;
+  white-space:   nowrap;
 }
 #wln-rescan-btn:hover   { background: var(--wln-border); }
 #wln-rescan-btn:active  { transform: scale(0.97); }
@@ -221,63 +257,74 @@ body.wln-active ytd-statement-banner-renderer {
 /* Stats row */
 #wln-stats-row {
   margin-top: 7px;
-  font-size: 12px;
-  color: var(--wln-text-muted);
+  font-size:  12px;
+  color:      var(--wln-text-muted);
   min-height: 16px;
 }
 
 /* ── Scan progress ───────────────────────────────────────────── */
-#wln-scan-progress {
-  margin-top: 8px;
-}
-.wln-scan-text {
-  font-size: 12px;
-  color: var(--wln-text-muted);
-  margin-bottom: 4px;
-}
-.wln-progress-track {
-  height: 3px;
-  background: var(--wln-border);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.wln-progress-fill {
-  height: 100%;
-  background: var(--wln-accent);
-  border-radius: 2px;
-  width: 0%;
-  transition: width 0.3s ease;
-}
+#wln-scan-progress  { margin-top: 8px; }
+.wln-scan-text      { font-size: 12px; color: var(--wln-text-muted); margin-bottom: 4px; }
+.wln-progress-track { height: 3px; background: var(--wln-border); border-radius: 2px; overflow: hidden; }
+.wln-progress-fill  { height: 100%; background: var(--wln-accent); border-radius: 2px; width: 0%; transition: width 0.3s ease; }
 
 /* ── Content area (scroll container) ────────────────────────── */
 #wln-content-area {
-  flex: 1;
+  flex:       1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 20px 24px 48px;
+  padding:    20px 24px 48px;
   scroll-behavior: smooth;
 }
-
-#wln-content-area::-webkit-scrollbar {
-  width: 6px;
-}
-#wln-content-area::-webkit-scrollbar-thumb {
-  background: var(--wln-border);
-  border-radius: 3px;
-}
-#wln-content-area::-webkit-scrollbar-track {
-  background: transparent;
-}
+#wln-content-area::-webkit-scrollbar       { width: 6px; }
+#wln-content-area::-webkit-scrollbar-thumb { background: var(--wln-border); border-radius: 3px; }
+#wln-content-area::-webkit-scrollbar-track { background: transparent; }
 
 /* ── Video grid ──────────────────────────────────────────────── */
-#wln-grid-wrapper {
-  width: 100%;
-}
+/*
+   BUG 4 FIX — column count:
+
+   Previous: repeat(auto-fill, minmax(270px, 1fr))
+   Problem:  on a 1366px laptop with 72px mini-guide, content = 1294px.
+             1294 / 270 = 4.79 → auto-fill picks 4 columns.  Too many.
+
+   Fix: explicit column counts with media-query breakpoints.
+   YouTube shows ~3 columns on a laptop viewport — we match that.
+   Breakpoints are viewport-width based (not content-width) because
+   CSS media queries cannot see our sidebar-offset left position.
+   The 1400px breakpoint ensures a 1366px laptop gets 3 columns.
+*/
+#wln-grid-wrapper { width: 100%; }
 
 #wln-video-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  /* Default: 4 columns for large desktops (≥ 1400px viewport) */
+  grid-template-columns: repeat(4, 1fr);
   gap: 18px;
+}
+
+/* Laptop / standard desktop: 3 columns (1000–1600px) */
+@media (max-width: 1600px) {
+  #wln-video-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+}
+
+/* Tablet: 2 columns (640–1000px) */
+@media (max-width: 1000px) {
+  #wln-video-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+  }
+}
+
+/* Mobile: 1 column (< 640px) */
+@media (max-width: 640px) {
+  #wln-video-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
 }
 
 /* ── Video card ──────────────────────────────────────────────── */
@@ -294,76 +341,61 @@ body.wln-active ytd-statement-banner-renderer {
   transform:  translateY(-2px);
   box-shadow: 0 4px 16px rgba(0,0,0,0.15);
 }
-.wln-video-card.wln-watched          { opacity: 0.55; }
-.wln-video-card.wln-watched:hover    { opacity: 1; }
+.wln-video-card.wln-watched       { opacity: 0.55; }
+.wln-video-card.wln-watched:hover { opacity: 1; }
 
 /* Thumbnail */
 .wln-thumb-wrap {
-  position:    relative;
+  position:     relative;
   aspect-ratio: 16 / 9;
-  background:  var(--wln-surface);
-  overflow:    hidden;
+  background:   var(--wln-surface);
+  overflow:     hidden;
 }
 .wln-thumb {
-  width:       100%;
-  height:      100%;
-  object-fit:  cover;
-  display:     block;
-  transition:  transform 0.2s ease;
+  width:      100%;
+  height:     100%;
+  object-fit: cover;
+  display:    block;
+  transition: transform 0.2s ease;
 }
 .wln-video-card:hover .wln-thumb { transform: scale(1.03); }
 
 /* Duration badge */
 .wln-duration-badge {
-  position:   absolute;
-  bottom:     6px;
-  right:      6px;
-  background: rgba(0,0,0,0.85);
-  color:      #fff;
-  font-size:  11px;
-  font-weight: 500;
-  padding:    2px 5px;
-  border-radius: 3px;
+  position:       absolute;
+  bottom:         6px;
+  right:          6px;
+  background:     rgba(0,0,0,0.85);
+  color:          #fff;
+  font-size:      11px;
+  font-weight:    500;
+  padding:        2px 5px;
+  border-radius:  3px;
   letter-spacing: 0.02em;
   pointer-events: none;
 }
 
-/* Play overlay (visible on hover) */
+/* Play overlay */
 .wln-watch-overlay {
-  position:   absolute;
-  inset:      0;
-  background: rgba(0,0,0,0.35);
-  display:    flex;
-  align-items: center;
+  position:        absolute;
+  inset:           0;
+  background:      rgba(0,0,0,0.35);
+  display:         flex;
+  align-items:     center;
   justify-content: center;
-  opacity:    0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
+  opacity:         0;
+  transition:      opacity 0.15s ease;
+  pointer-events:  none;
 }
 .wln-video-card:hover .wln-watch-overlay { opacity: 1; }
 
 /* Watched badge */
-.wln-watched-badge {
-  position: absolute;
-  top:  8px;
-  left: 8px;
-  pointer-events: none;
-}
-.wln-watched-badge span {
-  background:  rgba(0,0,0,0.72);
-  color:       #4caf50;
-  font-size:   10px;
-  font-weight: 600;
-  padding:     2px 7px;
-  border-radius: 10px;
-  letter-spacing: 0.03em;
-}
+.wln-watched-badge          { position: absolute; top: 8px; left: 8px; pointer-events: none; }
+.wln-watched-badge span     { background: rgba(0,0,0,0.72); color: #4caf50; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; letter-spacing: 0.03em; }
 
 /* Card info */
-.wln-card-info {
-  padding: 10px 12px 12px;
-}
-.wln-card-title {
+.wln-card-info    { padding: 10px 12px 12px; }
+.wln-card-title   {
   font-size:   13px;
   font-weight: 600;
   color:       var(--wln-text);
@@ -374,37 +406,22 @@ body.wln-active ytd-statement-banner-renderer {
   overflow:    hidden;
   margin-bottom: 5px;
 }
-.wln-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.wln-channel {
-  font-size:   12px;
-  color:       var(--wln-text-muted);
-  white-space: nowrap;
-  overflow:    hidden;
-  text-overflow: ellipsis;
-  max-width:   200px;
-}
+.wln-card-meta    { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.wln-channel      { font-size: 12px; color: var(--wln-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
 .wln-card-actions { display: flex; gap: 6px; }
 .wln-mark-btn {
-  font-size:  11px;
-  font-family: inherit;
-  background: var(--wln-surface);
-  border:     1px solid var(--wln-border);
-  color:      var(--wln-text-muted);
+  font-size:     11px;
+  font-family:   inherit;
+  background:    var(--wln-surface);
+  border:        1px solid var(--wln-border);
+  color:         var(--wln-text-muted);
   border-radius: 4px;
-  padding:    4px 8px;
-  cursor:     pointer;
-  transition: background var(--wln-transition), color var(--wln-transition);
-  white-space: nowrap;
+  padding:       4px 8px;
+  cursor:        pointer;
+  transition:    background var(--wln-transition), color var(--wln-transition);
+  white-space:   nowrap;
 }
-.wln-mark-btn:hover {
-  background: var(--wln-border);
-  color: var(--wln-text);
-}
+.wln-mark-btn:hover { background: var(--wln-border); color: var(--wln-text); }
 
 /* ── Empty states ────────────────────────────────────────────── */
 .wln-empty-state {
@@ -436,21 +453,21 @@ body.wln-active ytd-statement-banner-renderer {
 
 /* ── Toast notification ──────────────────────────────────────── */
 .wln-toast {
-  position:  fixed;
-  bottom:    32px;
-  left:      50%;
-  transform: translateX(-50%) translateY(12px);
-  background: #323232;
-  color:      #fff;
-  font-size:  13px;
-  padding:    10px 20px;
-  border-radius: 4px;
-  z-index:    99999;
-  opacity:    0;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  position:       fixed;
+  bottom:         32px;
+  left:           50%;
+  transform:      translateX(-50%) translateY(12px);
+  background:     #323232;
+  color:          #fff;
+  font-size:      13px;
+  padding:        10px 20px;
+  border-radius:  4px;
+  z-index:        99999;
+  opacity:        0;
+  transition:     opacity 0.2s ease, transform 0.2s ease;
   pointer-events: none;
-  white-space: nowrap;
-  box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+  white-space:    nowrap;
+  box-shadow:     0 3px 10px rgba(0,0,0,0.3);
 }
 .wln-toast.wln-toast-visible {
   opacity:   1;
@@ -458,60 +475,50 @@ body.wln-active ytd-statement-banner-renderer {
 }
 
 /* ── Sidebar "Watch Now" button ──────────────────────────────── */
-/* Inserted as a div after the Watch Later guide entry.
-   Must visually match ytd-guide-entry-renderer exactly.         */
+/* Inserted as a <div> after the Watch Later guide entry.
+   Must match ytd-guide-entry-renderer visually.              */
 
-#wln-sidebar-btn {
-  display: block;
-}
-
-.wln-guide-anchor {
-  display:         block;
-  text-decoration: none;
-  color:           inherit;
-  outline:         none;
-}
+#wln-sidebar-btn     { display: block; }
+.wln-guide-anchor    { display: block; text-decoration: none; color: inherit; outline: none; }
 
 .wln-guide-inner {
-  display:     flex;
-  align-items: center;
-  gap:         16px;
-  padding:     0 24px;
-  height:      40px;
+  display:       flex;
+  align-items:   center;
+  gap:           16px;
+  padding:       0 24px;
+  height:        40px;
   border-radius: 10px;
-  cursor:      pointer;
-  color:       var(--yt-spec-text-primary, #0f0f0f);
-  font-size:   14px;
-  font-family: "Roboto", "Arial", sans-serif;
-  font-weight: 400;
-  transition:  background var(--wln-transition);
-  white-space: nowrap;
-  overflow:    hidden;
+  cursor:        pointer;
+  color:         var(--yt-spec-text-primary, #0f0f0f);
+  font-size:     14px;
+  font-family:   "Roboto", "Arial", sans-serif;
+  font-weight:   400;
+  transition:    background var(--wln-transition);
+  white-space:   nowrap;
+  overflow:      hidden;
 }
 .wln-guide-inner:hover {
   background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.06));
 }
-
-/* When the Watch Now page is active, highlight the button */
 body.wln-active .wln-guide-inner {
-  background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.06));
+  background:  var(--yt-spec-badge-chip-background, rgba(0,0,0,0.06));
   font-weight: 600;
 }
 
+/* BUG 5 FIX — icon is now a 🔥 emoji, not an SVG.
+   Center it inside the 24×24 slot that matches YouTube's guide icon size. */
 .wln-guide-icon {
-  display:     flex;
-  align-items: center;
-  flex-shrink: 0;
-  width:       24px;
-  height:      24px;
-  color:       var(--yt-spec-text-primary, #0f0f0f);
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  flex-shrink:     0;
+  width:           24px;
+  height:          40px;        /* stretch to row height for vertical centering */
+  font-size:       18px;        /* comfortable emoji size */
+  line-height:     1;
 }
 
-.wln-guide-label {
-  flex: 1;
-  overflow:      hidden;
-  text-overflow: ellipsis;
-}
+.wln-guide-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Animations ──────────────────────────────────────────────── */
 @keyframes wln-fadein {
@@ -519,22 +526,9 @@ body.wln-active .wln-guide-inner {
   to   { opacity: 1; transform: translateY(0);   }
 }
 
-/* ── Responsive ──────────────────────────────────────────────── */
-@media (max-width: 900px) {
-  #wln-video-grid {
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 14px;
-  }
-}
-
+/* ── Responsive top-bar tweaks ───────────────────────────────── */
 @media (max-width: 640px) {
-  #wln-topbar    { padding: 10px 14px 8px; }
+  #wln-topbar       { padding: 10px 14px 8px; }
   #wln-content-area { padding: 14px 14px 32px; }
-
-  #wln-video-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 10px;
-  }
-
-  #wln-search-wrap { max-width: 100%; }
+  #wln-search-wrap  { max-width: 100%; }
 }
