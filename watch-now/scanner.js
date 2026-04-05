@@ -45,8 +45,8 @@ window.WatchNowScanner = (() => {
 
     progress(12, 'Parsing playlist…');
 
-    const { videos: firstBatch, continuation: firstToken } =
-      parseFirstResponse(firstData);
+    const firstBatch = extractVideos(firstData);
+    const firstToken = extractContinuation(firstData);
 
     if (firstBatch.length === 0 && !firstToken) {
       throw new Error(
@@ -81,7 +81,11 @@ window.WatchNowScanner = (() => {
 
       let result;
       try {
-        result = await fetchContinuation(token);
+        const data = await browsePost({ continuation: token });
+        result = {
+          videos:       extractVideos(data),
+          continuation: extractContinuation(data)
+        };
       } catch (e) {
         console.warn('[WatchLaterNow] Page', page, 'failed —', e.message, '— stopping');
         break;
@@ -117,133 +121,91 @@ window.WatchNowScanner = (() => {
     return { videos: allVideos };
   }
 
-  // ─── First response parser ──────────────────────────────────────────────────
+  // ─── Recursive tree search ──────────────────────────────────────────────────
   //
-  // The browse?browseId=VLWL response wraps the playlist several layers deep:
+  // Collects every value stored under `key` anywhere in the object tree,
+  // no matter how deeply nested.  This makes all parsing nesting-agnostic:
+  // YouTube can restructure its response wrapper layers without breaking us.
   //
-  //   data.contents
-  //     .twoColumnBrowseResultsRenderer.tabs[0]
-  //     .tabRenderer.content
-  //     .sectionListRenderer.contents[0]
-  //     .itemSectionRenderer.contents[0]
-  //     .playlistVideoListRenderer
-  //       .contents  ← videos + optional continuationItemRenderer
-  //       .continuations  ← legacy token array (alternate path)
-  //
-  // We use deepFind() so nesting changes don't break us.
+  // Uses Object.keys() (own enumerable only) rather than for…in to avoid
+  // iterating inherited prototype properties.
 
-  function parseFirstResponse(data) {
-    const plr = deepFind(data, 'playlistVideoListRenderer');
-    if (!plr) {
-      console.warn('[WatchLaterNow] playlistVideoListRenderer not found in browse response.');
-      console.warn('[WatchLaterNow] Response keys:', Object.keys(data || {}));
-      return { videos: [], continuation: null };
+  function findObjectsByKey(obj, key, results = []) {
+    if (!obj || typeof obj !== 'object') return results;
+
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      results.push(obj[key]);
     }
 
-    const { videos, continuation: tokenA } = parseItems(plr.contents || []);
-
-    // Token can be in plr.continuations[] (legacy/alternate format)
-    const tokenB = extractLegacyToken(plr.continuations);
-
-    // Last-resort: deep search inside the playlist renderer itself
-    let tokenC = null;
-    if (!tokenA && !tokenB) {
-      const cmd = deepFind(plr, 'continuationCommand');
-      if (cmd?.token) tokenC = cmd.token;
+    for (const k of Object.keys(obj)) {
+      findObjectsByKey(obj[k], key, results);
     }
 
-    const continuation = tokenA || tokenB || tokenC || null;
-
-    console.log(
-      '[WatchLaterNow] First page:', videos.length, 'videos |',
-      'token:', continuation
-        ? (tokenA ? 'Path A (continuationItemRenderer)'
-          : tokenB ? 'Path B (plr.continuations[])'
-          : 'Path C (deepFind)')
-        : 'NONE — playlist may be fully loaded'
-    );
-
-    return { videos, continuation };
+    return results;
   }
 
-  // ─── Continuation fetch ─────────────────────────────────────────────────────
+  // ─── Video extractor ────────────────────────────────────────────────────────
   //
-  // Continuation responses come in one of four shapes.  We check the most
-  // specific first (Shape A) and fall back to progressively broader searches.
+  // Finds every `playlistVideoRenderer` in the response tree and maps each
+  // to a VideoRecord.  Skips entries that have neither a title nor a thumbnail
+  // (private / deleted videos that YouTube still lists as placeholders).
 
-  async function fetchContinuation(token) {
-    const data = await browsePost({ continuation: token });
+  function extractVideos(data) {
+    const renderers = findObjectsByKey(data, 'playlistVideoRenderer');
 
-    // Shape A — continuationContents.playlistVideoListContinuation
-    // Most specific; commonly returned for Watch Later.
-    const plc = data?.continuationContents?.playlistVideoListContinuation;
-    if (plc) {
-      const { videos, continuation: tokenA } = parseItems(plc.contents || []);
-      const tokenB = extractLegacyToken(plc.continuations);
-      return { videos, continuation: tokenA || tokenB || null };
-    }
-
-    // Shape B — onResponseReceivedActions[].appendContinuationItemsAction
-    const actions = data?.onResponseReceivedActions || [];
-    for (const action of actions) {
-      const items =
-        action?.appendContinuationItemsAction?.continuationItems ||
-        action?.reloadContinuationItemsCommand?.continuationItems;
-      if (items) return parseItems(items);
-    }
-
-    // Shape C — top-level continuationItems
-    if (Array.isArray(data?.continuationItems)) {
-      return parseItems(data.continuationItems);
-    }
-
-    // Shape D — deep search (last resort)
-    const items = deepFind(data, 'continuationItems');
-    if (Array.isArray(items)) return parseItems(items);
-
-    // No items found — signals end of playlist
-    return { videos: [], continuation: null };
-  }
-
-  // ─── Item parser ────────────────────────────────────────────────────────────
-  //
-  // Walks a raw contents[] array and extracts:
-  //   • VideoRecord objects from playlistVideoRenderer entries
-  //   • The next continuation token from continuationItemRenderer
-
-  function parseItems(items) {
     const videos = [];
-    let continuation = null;
+    for (const v of renderers) {
+      if (!v?.videoId) continue;
 
-    for (const item of items) {
-      // ── Video ──────────────────────────────────────────────────────────────
-      const v = item?.playlistVideoRenderer;
-      if (v?.videoId) {
-        const title = getText(v.title);
-        // Skip videos with no title AND no thumbnail (private/deleted)
-        if (!title && !v.thumbnail?.thumbnails?.length) continue;
+      const title = getText(v.title);
+      // Skip genuinely unavailable videos (no title, no thumbnail)
+      if (!title && !v.thumbnail?.thumbnails?.length) continue;
 
-        videos.push({
-          videoId:   v.videoId,
-          title:     title || 'Untitled',
-          channel:   getText(v.shortBylineText) || getText(v.longBylineText) || '',
-          duration:  v.lengthText?.simpleText   || getText(v.lengthText)     || '',
-          thumbnail: bestThumbnail(v.thumbnail?.thumbnails, v.videoId),
-          videoUrl:  `https://www.youtube.com/watch?v=${v.videoId}`
-        });
-      }
-
-      // ── Continuation token ─────────────────────────────────────────────────
-      const cont = item?.continuationItemRenderer;
-      if (cont) {
-        const tok =
-          cont?.continuationEndpoint?.continuationCommand?.token ||
-          cont?.button?.buttonRenderer?.command?.continuationCommand?.token;
-        if (tok) continuation = tok;
-      }
+      videos.push({
+        videoId:   v.videoId,
+        title:     title || 'Untitled',
+        channel:   getText(v.shortBylineText) || getText(v.longBylineText) || '',
+        duration:  v.lengthText?.simpleText   || getText(v.lengthText)     || '',
+        thumbnail: bestThumbnail(v.thumbnail?.thumbnails, v.videoId),
+        videoUrl:  `https://www.youtube.com/watch?v=${v.videoId}`
+      });
     }
 
-    return { videos, continuation };
+    return videos;
+  }
+
+  // ─── Continuation token extractor ───────────────────────────────────────────
+  //
+  // Finds every `continuationItemRenderer` in the response tree.
+  // There is normally exactly one per response; we take the first.
+  //
+  // Two token paths exist inside continuationItemRenderer:
+  //   Primary:   continuationEndpoint.continuationCommand.token
+  //   Secondary: button.buttonRenderer.command.continuationCommand.token
+  //
+  // Additionally, some Watch Later responses store the token in a legacy
+  // `continuations[]` array at the playlistVideoListRenderer level.
+  // We check that as a final fallback.
+
+  function extractContinuation(data) {
+    // Primary path via continuationItemRenderer (all modern responses)
+    const items = findObjectsByKey(data, 'continuationItemRenderer');
+    for (const cont of items) {
+      const tok =
+        cont?.continuationEndpoint?.continuationCommand?.token ||
+        cont?.button?.buttonRenderer?.command?.continuationCommand?.token;
+      if (tok) return tok;
+    }
+
+    // Legacy fallback: plr.continuations[].nextContinuationData.continuation
+    // Still returned by some Watch Later configurations.
+    const legacyArrays = findObjectsByKey(data, 'continuations');
+    for (const arr of legacyArrays) {
+      const tok = extractLegacyToken(arr);
+      if (tok) return tok;
+    }
+
+    return null;
   }
 
   // ─── Core API call ──────────────────────────────────────────────────────────
